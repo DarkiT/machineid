@@ -24,7 +24,7 @@ func run(stdout, stderr io.Writer, cmd string, args ...string) error {
 func protect(appID, id string) string {
 	mac := hmac.New(sha256.New, []byte(id))
 	mac.Write([]byte(appID))
-	return uuid.NewSHA1(uuid.NameSpaceDNS, mac.Sum(nil)).String()
+	return strings.ToUpper(uuid.NewSHA1(uuid.NameSpaceDNS, mac.Sum(nil)).String())
 }
 
 func readFile(filename string) ([]byte, error) {
