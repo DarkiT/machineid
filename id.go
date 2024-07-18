@@ -21,6 +21,7 @@ package machineid // import "github.com/darkit/machineid"
 
 import (
 	"fmt"
+	"net"
 )
 
 // ID returns the platform specific machine id of the current host OS.
@@ -41,5 +42,22 @@ func ProtectedID(appID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("machineid: %v", err)
 	}
-	return protect(appID, id), nil
+	return protect(fmt.Sprintf("%s/%s", appID, getMACAddr()), id), nil
+}
+
+// 获取网卡 MAC 地址
+func getMACAddr() (macAddr string) {
+	ifas, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	// 遍历所有网卡
+	for _, iface := range ifas {
+		// 过滤掉回环接口和没有MAC地址的接口
+		if iface.Flags&net.FlagLoopback == 0 && iface.HardwareAddr != nil {
+			macAddr = iface.HardwareAddr.String()
+			break
+		}
+	}
+	return macAddr
 }
