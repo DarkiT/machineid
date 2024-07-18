@@ -6,6 +6,11 @@
 
 [![GoDoc](https://godoc.org/github.com/denisbrodbeck/machineid?status.svg)](https://godoc.org/github.com/denisbrodbeck/machineid) [![Go Report Card](https://goreportcard.com/badge/github.com/denisbrodbeck/machineid)](https://goreportcard.com/report/github.com/denisbrodbeck/machineid)
 
+## Fork
+
+[This](https://github.com/darkit/machineid) is a fork of [github.com/denisbrodbeck/machineid](https://github.com/denisbrodbeck/machineid).
+The fork solve some issues in the original library (docker support and customizable machine-id file, macOS cron support, ...).
+
 ## Main Features
 
 * Cross-Platform (tested on Win7+, Debian 8+, Ubuntu 14.04+, OS X 10.6+, FreeBSD 11+)
@@ -18,13 +23,13 @@
 Get the library with
 
 ```bash
-go get github.com/denisbrodbeck/machineid
+go get github.com/darkit/machineid
 ```
 
 You can also add the cli app directly to your `$GOPATH/bin` with
 
 ```bash
-go get github.com/denisbrodbeck/machineid/cmd/machineid
+go get github.com/darkit/machineid/cmd/machineid
 ```
 
 ## Usage
@@ -35,7 +40,7 @@ package main
 import (
   "fmt"
   "log"
-  "github.com/denisbrodbeck/machineid"
+  "github.com/darkit/machineid"
 )
 
 func main() {
@@ -55,7 +60,7 @@ package main
 import (
   "fmt"
   "log"
-  "github.com/denisbrodbeck/machineid"
+  "github.com/darkit/machineid"
 )
 
 func main() {
@@ -84,7 +89,7 @@ All machine IDs are usually generated during system installation and stay consta
 The following sources are used:
 
 * **BSD** uses `/etc/hostid` and `smbios.system.uuid` as a fallback
-* **Linux** uses `/var/lib/dbus/machine-id` ([man](http://man7.org/linux/man-pages/man5/machine-id.5.html))
+* **Linux** uses `$MACHINE_ID_FILE` (if not empty), `/var/lib/dbus/machine-id`, `/etc/machine-id` ([man](http://man7.org/linux/man-pages/man5/machine-id.5.html))
 * **OS X** uses `IOPlatformUUID`
 * **Windows** uses the `MachineGuid` from `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography`
 
@@ -113,7 +118,7 @@ import (
   "crypto/hmac"
   "crypto/sha256"
   "fmt"
-  "github.com/denisbrodbeck/machineid"
+  "github.com/darkit/machineid"
 )
 
 const appKey = "WowSuchNiceApp"
@@ -175,6 +180,7 @@ or
 
 ## Credits
 
+The [original library](github.com/denisbrodbeck/machineid) was created by [Denis Brodbeck](https://github.com/denisbrodbeck).
 The Go gopher was created by [Denis Brodbeck](https://github.com/denisbrodbeck) with [gopherize.me](https://gopherize.me/), based on original artwork from [Renee French](http://reneefrench.blogspot.com/).
 
 ## License

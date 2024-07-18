@@ -25,5 +25,6 @@ _testmain.go
 
 .DS_Store
 .vscode
+.idea/
 result
 /machineid
