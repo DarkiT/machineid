@@ -45,19 +45,37 @@ func ProtectedID(appID string) (string, error) {
 	return protect(fmt.Sprintf("%s/%s", appID, getMACAddr()), id), nil
 }
 
-// 获取网卡 MAC 地址
+// 获取网卡 MAC 地址，返回所有物理网卡中MAC地址最小的那个
 func getMACAddr() (macAddr string) {
+	// 获取所有网络接口
 	ifas, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
+
+	// 用于存储找到的最小MAC地址
+	var minMACAddr string
+
 	// 遍历所有网卡
 	for _, iface := range ifas {
-		// 过滤掉回环接口和没有MAC地址的接口
-		if iface.Flags&net.FlagLoopback == 0 && iface.HardwareAddr != nil {
-			macAddr = iface.HardwareAddr.String()
-			break
+		// 过滤条件：
+		// 1. 不是回环接口 (FlagLoopback)
+		// 2. 有MAC地址
+		// 3. 接口处于开启状态 (FlagUp)
+		// 4. 不是虚拟接口 (FlagPointToPoint)
+		if iface.Flags&net.FlagLoopback == 0 && // 不是回环接口
+			iface.HardwareAddr != nil && // 有MAC地址
+			iface.Flags&net.FlagUp != 0 && // 接口是启用的
+			iface.Flags&net.FlagPointToPoint == 0 && // 不是点对点接口（虚拟接口）
+			len(iface.HardwareAddr.String()) > 0 { // MAC地址长度大于0
+
+			currentMAC := iface.HardwareAddr.String()
+
+			// 如果是第一个找到的MAC地址，或者当前MAC地址小于已存储的最小值
+			if minMACAddr == "" || currentMAC < minMACAddr {
+				minMACAddr = currentMAC
+			}
 		}
 	}
-	return macAddr
+	return minMACAddr
 }

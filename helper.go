@@ -32,7 +32,7 @@ func readFile(filename string) ([]byte, error) {
 }
 
 func writeFile(filename string, data []byte) error {
-	return os.WriteFile(filename, data, 0644)
+	return os.WriteFile(filename, data, 0o644)
 }
 
 // readFirstFile tries all the pathnames listed and returns the contents of the first readable file.
