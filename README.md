@@ -185,4 +185,4 @@ The Go gopher was created by [Denis Brodbeck](https://github.com/denisbrodbeck) 
 
 ## License
 
-The MIT License (MIT) — [Denis Brodbeck](https://github.com/denisbrodbeck). Please have a look at the [LICENSE.md](LICENSE.md) for more details.
+The MIT License (MIT) — [Denis Brodbeck](https://github.com/denisbrodbeck). Please have a look at the [LICENSE](LICENSE) for more details.

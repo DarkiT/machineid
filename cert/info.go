@@ -23,7 +23,7 @@ type Authorizer struct {
 // ClientInfo 客户端信息
 type ClientInfo struct {
 	// 基本信息
-	MachineID  string    // 机器码
+	MachineID  string    // 机器码可以是单个或多个（用逗号分隔）
 	ExpiryDate time.Time // 授权结束日期
 
 	// 公司信息

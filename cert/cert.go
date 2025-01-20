@@ -13,11 +13,12 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // 默认企业标识符
-const defaultEnterpriseID = 51364
+const defaultEnterpriseID = 62996
 
 // 定义包级变量
 var (
@@ -238,7 +239,8 @@ func (a *Authorizer) IssueClientCert(info ClientInfo) (*Certificate, error) {
 		return nil, fmt.Errorf("failed to marshal contact info: %v", err)
 	}
 
-	// 添加机器ID
+	// 机器码可以是单个或多个（用逗号分隔）
+	// 例如: "MACHINE001,MACHINE002,MACHINE003"
 	machineIDValue, err := asn1.Marshal(info.MachineID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal machine ID: %v", err)
@@ -336,11 +338,15 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 			if _, err := asn1.Unmarshal(ext.Value, &certMachineID); err != nil {
 				return fmt.Errorf("failed to unmarshal machine ID: %v", err)
 			}
-			if certMachineID != machineID {
-				return errors.New("machine ID mismatch")
+
+			// 分割证书中的机器码列表并验证
+			authorizedIDs := strings.Split(strings.TrimSpace(certMachineID), ",")
+			for _, id := range authorizedIDs {
+				if strings.TrimSpace(id) == machineID {
+					foundMachineID = true
+					break
+				}
 			}
-			foundMachineID = true
-			break
 		}
 	}
 
@@ -536,19 +542,6 @@ func (a *Authorizer) GetCACertPEM() []byte {
 	return a.caCertPEM
 }
 
-// 生成主体密钥标识符(Subject Key Identifier)
-func generateSKI(pubKey *rsa.PublicKey) []byte {
-	// 使用公钥的SHA-1哈希作为SKI
-	pubKeyDER, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return nil
-	}
-
-	h := sha1.New()
-	h.Write(pubKeyDER)
-	return h.Sum(nil)
-}
-
 // initCA 初始化CA证书和私钥
 func (a *Authorizer) initCA() error {
 	a.mu.Lock()
@@ -589,4 +582,17 @@ func (a *Authorizer) initCA() error {
 
 	a.initialized = true
 	return nil
+}
+
+// 生成主体密钥标识符(Subject Key Identifier)
+func generateSKI(pubKey *rsa.PublicKey) []byte {
+	// 使用公钥的SHA-1哈希作为SKI
+	pubKeyDER, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return nil
+	}
+
+	h := sha1.New()
+	h.Write(pubKeyDER)
+	return h.Sum(nil)
 }
