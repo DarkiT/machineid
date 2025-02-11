@@ -154,7 +154,7 @@ func WithEnterpriseID(id int) Option {
 // New 创建新的授权管理器
 func New(opts ...Option) (*Authorizer, error) {
 	auth := &Authorizer{
-		currentVersion: "0.0.0",
+		currentVersion: "0.0.0",       // 当前程序版本号
 		caCertPEM:      defaultCACert, // 使用默认CA证书
 		caKeyPEM:       defaultCAKey,  // 使用默认CA私钥
 	}
@@ -206,6 +206,11 @@ func (a *Authorizer) IssueClientCert(info ClientInfo) (*Certificate, error) {
 		return nil, errors.New("authorizer not initialized")
 	}
 
+	// 检查版本信息是否有效
+	if info.Version == "" {
+		return nil, errors.New("version information cannot be empty")
+	}
+
 	// 生成新的RSA密钥对
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -246,11 +251,23 @@ func (a *Authorizer) IssueClientCert(info ClientInfo) (*Certificate, error) {
 		return nil, fmt.Errorf("failed to marshal machine ID: %v", err)
 	}
 
-	// 添加版本信息
+	// 对证书格式版本的格式检查
+	if _, err := parse(info.Version); err != nil {
+		return nil, fmt.Errorf("invalid version format: %s", info.Version)
+	}
+
+	// 计算证书的最大有效天数
+	var validityDays int
+	if info.ValidityPeriodDays > 0 {
+		validityDays = info.ValidityPeriodDays
+	} else {
+		validityDays = int(time.Until(info.ExpiryDate).Hours() / 24)
+	}
+
 	versionInfo := VersionInfo{
 		MinRequiredVersion: info.Version,
 		CertVersion:        currentCertVersion,
-		MaxValidDays:       info.MaxValidDays,
+		MaxValidDays:       validityDays,
 	}
 
 	versionValue, err := asn1.Marshal(versionInfo)
@@ -330,6 +347,16 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 		return fmt.Errorf("certificate verification failed: %v", err)
 	}
 
+	// 检查证书有效性
+	if err = a.validateCertificateValidity(cert); err != nil {
+		return err
+	}
+
+	// 检查版本信息
+	if err = a.validateVersionInfo(cert); err != nil {
+		return err
+	}
+
 	// 验证机器ID
 	var foundMachineID bool
 	for _, ext := range cert.Extensions {
@@ -354,16 +381,20 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 		return errors.New("machine ID extension not found")
 	}
 
-	// 获取系统启动时间，用于检测时间篡改
-	bootTime := getSystemBootTime()
+	return nil
+}
+
+// validateCertificateValidity 检查证书的有效期
+func (a *Authorizer) validateCertificateValidity(cert *x509.Certificate) error {
 	now := time.Now()
+	bootTime := getSystemBootTime()
 
 	// 如果当前时间早于系统启动时间，说明系统时间被回调
 	if now.Before(bootTime) {
 		return errors.New("system time appears to be manipulated")
 	}
 
-	// 检查证书有效期时增加额外验证
+	// 检查证书有效期
 	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
 		return errors.New("certificate time validation failed")
 	}
@@ -373,7 +404,11 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 		return fmt.Errorf("certificate has been revoked: %s", reason)
 	}
 
-	// 解析并验证版本信息
+	return nil
+}
+
+// validateVersionInfo 检查版本信息
+func (a *Authorizer) validateVersionInfo(cert *x509.Certificate) error {
 	var versionInfo VersionInfo
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(a.getOID(3)) {
@@ -385,8 +420,28 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 	}
 
 	// 检查程序版本是否满足要求
-	if a.currentVersion < versionInfo.MinRequiredVersion {
-		return fmt.Errorf("program version %s is lower than required version %s", a.currentVersion, versionInfo.MinRequiredVersion)
+	if a.currentVersion != "0.0.0" {
+		if versionInfo.MinRequiredVersion == "" {
+			return errors.New("version information is missing in the certificate")
+		}
+
+		// 这里可以增加对版本格式的检查
+		if _, err := parse(versionInfo.MinRequiredVersion); err != nil {
+			return fmt.Errorf("invalid version format: %s", versionInfo.MinRequiredVersion)
+		}
+
+		ok, err := compare(a.currentVersion, "<", versionInfo.MinRequiredVersion)
+		if err != nil {
+			return fmt.Errorf("version comparison error: %v", err)
+		}
+		if ok {
+			return fmt.Errorf("program version %s is lower than required version %s", a.currentVersion, versionInfo.MinRequiredVersion)
+		}
+	}
+
+	// 证书格式版本检查
+	if versionInfo.CertVersion != currentCertVersion {
+		return fmt.Errorf("certificate format version %s does not match current version %s", versionInfo.CertVersion, currentCertVersion)
 	}
 
 	// 检查证书是否超过最大有效期
@@ -418,23 +473,7 @@ func (a *Authorizer) GenerateCA(info CAInfo) error {
 	}
 
 	// 创建证书模板
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject: pkix.Name{
-			CommonName:   info.CommonName,
-			Organization: []string{info.Organization},
-			Country:      []string{info.Country},
-			Province:     []string{info.Province},
-			Locality:     []string{info.Locality},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(0, 0, info.ValidDays),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLen:            0,
-		SubjectKeyId:          generateSKI(&privateKey.PublicKey),
-	}
+	template := createCertificateTemplate(info, privateKey)
 
 	// 自签名CA证书
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
@@ -582,6 +621,27 @@ func (a *Authorizer) initCA() error {
 
 	a.initialized = true
 	return nil
+}
+
+// createCertificateTemplate 创建证书模板
+func createCertificateTemplate(info CAInfo, privateKey *rsa.PrivateKey) *x509.Certificate {
+	return &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName:   info.CommonName,
+			Organization: []string{info.Organization},
+			Country:      []string{info.Country},
+			Province:     []string{info.Province},
+			Locality:     []string{info.Locality},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, info.ValidDays),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+		SubjectKeyId:          generateSKI(&privateKey.PublicKey),
+	}
 }
 
 // 生成主体密钥标识符(Subject Key Identifier)

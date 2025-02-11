@@ -39,12 +39,12 @@ func main() {
 		return
 	}
 	clientInfo := cert.ClientInfo{
-		MachineID:    id,
-		ExpiryDate:   time.Now().AddDate(1, 0, 0),
-		CompanyName:  "XX广州分公司",
-		Department:   "技术部",
-		Version:      "1.0.0",
-		MaxValidDays: 365,
+		MachineID:          id,
+		ExpiryDate:         time.Now().AddDate(1, 0, 0),
+		CompanyName:        "XX广州分公司",
+		Department:         "技术部",
+		Version:            "1.0.0",
+		ValidityPeriodDays: 365,
 	}
 
 	certificate, err := auth.IssueClientCert(clientInfo)

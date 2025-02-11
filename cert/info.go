@@ -40,8 +40,8 @@ type ClientInfo struct {
 	Address  string // 详细地址
 
 	// 版本信息
-	Version      string // 当前程序版本
-	MaxValidDays int    // 最大有效天数
+	Version            string // 当前程序版本
+	ValidityPeriodDays int    // 证书有效天数
 }
 
 // Certificate 证书信息
