@@ -1,0 +1,28 @@
+$:
+  vscode:
+    - runner:
+        cpus: 4
+        tags: cnb:arch:amd64
+      docker:
+        image: docker.cnb.cool/zishuo/default-dev-env:latest
+      imports: https://cnb.cool/zishuo/system-env/-/blob/main/scripts/envs.yml
+      services:
+        - vscode
+        - docker
+      stages:
+        - name: Start Runit
+          script: setsid runsvdir /etc/service >/dev/null 2>&1 &
+        - name: Start MCPTools
+          script: npx claude-code-templates --analytics >/dev/null 2>&1 &
+        - name: Reset AIConfig
+          script: |
+            cp -af /workspace/.claude-conf /root/.claude >/dev/null 2>&1 &
+            cp -af /workspace/.aws /root/.aws >/dev/null 2>&1 &
+            cp -af /workspace/.claude.json /root/.claude.json >/dev/null 2>&1 &
+            rm -rf /workspace/.claude /workspace/.aws /workspace/.claude.json
+      endStages:
+        - name: Backup AIConfig
+          script: |
+            cp -af /root/.claude /workspace/.claude-conf >/dev/null 2>&1 &
+            cp -af /root/.aws /workspace/.aws  >/dev/null 2>&1 &
+            cp -af /root/.claude.json /workspace/.claude.json  >/dev/null 2>&1 &
