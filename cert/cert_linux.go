@@ -61,12 +61,18 @@ func getProcessStartTime() time.Time {
 	}
 
 	// 第22个字段是进程启动时间（以系统启动后的时钟滴答数表示）
-	startTicks, err := fmt.Sscanf(fields[21], "%d", new(int64))
-	if err != nil {
+	var startTicks int64
+	if _, err := fmt.Sscanf(fields[21], "%d", &startTicks); err != nil {
 		return time.Now()
 	}
 
 	// 获取系统时钟频率
 	clockTicks := int64(100) // 大多数Linux系统默认为100
-	return time.Now().Add(-time.Second * time.Duration(startTicks) / time.Duration(clockTicks))
+	if startTicks > 0 {
+		// 计算进程启动时间
+		uptime := time.Duration(startTicks) * time.Second / time.Duration(clockTicks)
+		return time.Now().Add(-uptime)
+	}
+
+	return time.Now()
 }

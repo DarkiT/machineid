@@ -113,69 +113,23 @@ h2Eo87U5M9rbrnZNHaLKbyqLqcO9c89glgymugM0vGEqRaxpEfpk8ZHNjc4=
 -----END RSA PRIVATE KEY-----`)
 )
 
-// Option 配置选项函数类型
-type Option func(*Authorizer) error
+// New 创建新的授权管理器（向后兼容）
+// Deprecated: 使用 NewAuthorizer().Build() 代替
+func New(opts ...func(*Authorizer) error) (*Authorizer, error) {
+	// 兼容旧API，但使用新的构建器
+	builder := NewAuthorizer()
 
-// WithCA 设置自定义的CA证书和私钥
-func WithCA(cert, key []byte) Option {
-	return func(a *Authorizer) error {
-		if cert != nil {
-			a.caCertPEM = cert
-		}
-		if key != nil {
-			a.caKeyPEM = key
-		}
-		return nil
-	}
-}
-
-// WithVersion 设置程序版本的选项
-func WithVersion(version string) Option {
-	return func(a *Authorizer) error {
-		if version == "" {
-			return errors.New("version cannot be empty")
-		}
-		a.currentVersion = version
-		return nil
-	}
-}
-
-// WithEnterpriseID 设置企业标识符
-func WithEnterpriseID(id int) Option {
-	return func(a *Authorizer) error {
-		if id <= 0 {
-			return errors.New("invalid enterprise ID")
-		}
-		a.enterpriseID = id
-		return nil
-	}
-}
-
-// New 创建新的授权管理器
-func New(opts ...Option) (*Authorizer, error) {
-	auth := &Authorizer{
-		currentVersion: "0.0.0",       // 当前程序版本号
-		caCertPEM:      defaultCACert, // 使用默认CA证书
-		caKeyPEM:       defaultCAKey,  // 使用默认CA私钥
-	}
-
-	// 创建默认的吊销管理器
-	rm, err := NewRevokeManager(auth.currentVersion)
+	// 应用旧的选项（这里可以添加转换逻辑）
+	auth, err := builder.Build()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create revoke manager: %v", err)
+		return nil, err
 	}
-	auth.revokeManager = rm
 
-	// 应用选项，如果提供了自定义的CA，会覆盖默认值
+	// 应用旧选项
 	for _, opt := range opts {
 		if err := opt(auth); err != nil {
 			return nil, err
 		}
-	}
-
-	// 初始化CA证书
-	if err := auth.initCA(); err != nil {
-		return nil, err
 	}
 
 	return auth, nil
@@ -198,111 +152,46 @@ func (a *Authorizer) getOID(purpose int) asn1.ObjectIdentifier {
 }
 
 // IssueClientCert 签发客户端证书
-func (a *Authorizer) IssueClientCert(info ClientInfo) (*Certificate, error) {
+func (a *Authorizer) IssueClientCert(req *ClientCertRequest) (*Certificate, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if !a.initialized {
-		return nil, errors.New("authorizer not initialized")
+		return nil, NewConfigError(ErrMissingCA, "authorizer not initialized", nil)
 	}
 
-	// 检查版本信息是否有效
-	if info.Version == "" {
-		return nil, errors.New("version information cannot be empty")
+	// 验证请求
+	if err := req.Validate(); err != nil {
+		return nil, NewValidationError(ErrInvalidVersion, "invalid client certificate request", err)
 	}
+
+	// 应用默认值
+	req.SetDefaults()
 
 	// 生成新的RSA密钥对
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate private key: %v", err)
+		return nil, NewSystemError(ErrSystemClockSkew, "failed to generate private key", err)
 	}
 
 	// 创建证书模板
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject: pkix.Name{
-			CommonName:         info.CompanyName,
-			Organization:       []string{info.CompanyName},
-			OrganizationalUnit: []string{info.Department},
-			Country:            []string{info.Country},
-			Province:           []string{info.Province},
-			Locality:           []string{info.City},
-			StreetAddress:      []string{info.Address},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              info.ExpiryDate,
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
+	template := a.createCertificateTemplate(req, privateKey)
 
-	// 添加联系信息作为扩展
-	contactInfo := fmt.Sprintf("联系人: %s\n电话: %s\n邮箱: %s", info.ContactPerson, info.ContactPhone, info.ContactEmail)
-	contactValue, err := asn1.Marshal(contactInfo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal contact info: %v", err)
-	}
-
-	// 机器码可以是单个或多个（用逗号分隔）
-	// 例如: "MACHINE001,MACHINE002,MACHINE003"
-	machineIDValue, err := asn1.Marshal(info.MachineID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal machine ID: %v", err)
-	}
-
-	// 对证书格式版本的格式检查
-	if _, err := parse(info.Version); err != nil {
-		return nil, fmt.Errorf("invalid version format: %s", info.Version)
-	}
-
-	// 计算证书的最大有效天数
-	var validityDays int
-	if info.ValidityPeriodDays > 0 {
-		validityDays = info.ValidityPeriodDays
-	} else {
-		validityDays = int(time.Until(info.ExpiryDate).Hours() / 24)
-	}
-
-	versionInfo := VersionInfo{
-		MinRequiredVersion: info.Version,
-		CertVersion:        currentCertVersion,
-		MaxValidDays:       validityDays,
-	}
-
-	versionValue, err := asn1.Marshal(versionInfo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal version info: %v", err)
-	}
-
-	template.ExtraExtensions = []pkix.Extension{
-		{
-			Id:       a.getOID(1), // 1: machineID
-			Critical: false,
-			Value:    machineIDValue,
-		},
-		{
-			Id:       a.getOID(2), // 2: contact
-			Critical: false,
-			Value:    contactValue,
-		},
-		{
-			Id:       a.getOID(3), // 3: version
-			Critical: false,
-			Value:    versionValue,
-		},
+	// 添加扩展信息
+	if err := a.addCertificateExtensions(template, req); err != nil {
+		return nil, err
 	}
 
 	// 签发证书
 	certDER, err := x509.CreateCertificate(rand.Reader, template, a.caCert, &privateKey.PublicKey, a.caKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create certificate: %v", err)
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to create certificate", err)
 	}
 
 	return &Certificate{
 		CertPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
 		KeyPEM:    pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}),
-		MachineID: info.MachineID,
+		MachineID: req.Identity.MachineID,
 		NotBefore: template.NotBefore,
 		NotAfter:  template.NotAfter,
 	}, nil
@@ -310,27 +199,27 @@ func (a *Authorizer) IssueClientCert(info ClientInfo) (*Certificate, error) {
 
 // ValidateCert 验证客户端证书
 func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
-	// 检查调试器
-	if checkDebugger() {
-		return errors.New("debugging detected")
+	// 执行完整的安全检查（如果启用）
+	if err := a.PerformSecurityCheck(); err != nil {
+		return err
 	}
 
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if !a.initialized {
-		return errors.New("authorizer not initialized")
+		return NewConfigError(ErrMissingCA, "authorizer not initialized", nil)
 	}
 
 	// 解析证书
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		return errors.New("failed to decode certificate PEM")
+		return NewCertificateError(ErrInvalidCertificate, "failed to decode certificate PEM", nil)
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %v", err)
+		return NewCertificateError(ErrInvalidCertificate, "failed to parse certificate", err)
 	}
 
 	// 验证证书链
@@ -344,7 +233,7 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 	}
 
 	if _, err = cert.Verify(opts); err != nil {
-		return fmt.Errorf("certificate verification failed: %v", err)
+		return NewCertificateError(ErrInvalidCertificate, "certificate verification failed", err)
 	}
 
 	// 检查证书有效性
@@ -358,50 +247,123 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 	}
 
 	// 验证机器ID
-	var foundMachineID bool
-	for _, ext := range cert.Extensions {
-		if ext.Id.Equal(a.getOID(1)) {
-			var certMachineID string
-			if _, err := asn1.Unmarshal(ext.Value, &certMachineID); err != nil {
-				return fmt.Errorf("failed to unmarshal machine ID: %v", err)
-			}
-
-			// 分割证书中的机器码列表并验证
-			authorizedIDs := strings.Split(strings.TrimSpace(certMachineID), ",")
-			for _, id := range authorizedIDs {
-				if strings.TrimSpace(id) == machineID {
-					foundMachineID = true
-					break
-				}
-			}
-		}
-	}
-
-	if !foundMachineID {
-		return errors.New("machine ID extension not found")
+	if err = a.validateMachineID(cert, machineID); err != nil {
+		return err
 	}
 
 	return nil
 }
 
+// ExtractClientInfo 从证书中提取客户信息
+func (a *Authorizer) ExtractClientInfo(certPEM []byte) (*ClientInfo, error) {
+	// 解析证书
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to decode certificate PEM", nil)
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to parse certificate", err)
+	}
+
+	clientInfo := &ClientInfo{
+		// 从证书基本信息中提取
+		ExpiryDate: cert.NotAfter,
+	}
+
+	// 从证书主题中提取公司信息
+	if len(cert.Subject.Organization) > 0 {
+		clientInfo.CompanyName = cert.Subject.Organization[0]
+	}
+	if len(cert.Subject.OrganizationalUnit) > 0 {
+		clientInfo.Department = cert.Subject.OrganizationalUnit[0]
+	}
+	if len(cert.Subject.Country) > 0 {
+		clientInfo.Country = cert.Subject.Country[0]
+	}
+	if len(cert.Subject.Province) > 0 {
+		clientInfo.Province = cert.Subject.Province[0]
+	}
+	if len(cert.Subject.Locality) > 0 {
+		clientInfo.City = cert.Subject.Locality[0]
+	}
+
+	// 从扩展字段中提取详细信息
+	for _, ext := range cert.Extensions {
+		// 提取机器ID (OID: 1)
+		if ext.Id.Equal(a.getOID(1)) {
+			var machineID string
+			if _, err := asn1.Unmarshal(ext.Value, &machineID); err == nil {
+				clientInfo.MachineID = machineID
+			}
+		}
+
+		// 提取联系信息 (OID: 2)
+		if ext.Id.Equal(a.getOID(2)) {
+			var contact Contact
+			if _, err := asn1.Unmarshal(ext.Value, &contact); err == nil {
+				clientInfo.ContactPerson = contact.Person
+				clientInfo.ContactPhone = contact.Phone
+				clientInfo.ContactEmail = contact.Email
+			}
+		}
+
+		// 提取版本信息 (OID: 3)
+		if ext.Id.Equal(a.getOID(3)) {
+			var versionInfo VersionInfo
+			if _, err := asn1.Unmarshal(ext.Value, &versionInfo); err == nil {
+				clientInfo.Version = versionInfo.MinRequiredVersion
+				clientInfo.ValidityPeriodDays = versionInfo.MaxValidDays
+			}
+		}
+	}
+
+	return clientInfo, nil
+}
+
 // validateCertificateValidity 检查证书的有效期
 func (a *Authorizer) validateCertificateValidity(cert *x509.Certificate) error {
 	now := time.Now()
-	bootTime := getSystemBootTime()
 
-	// 如果当前时间早于系统启动时间，说明系统时间被回调
-	if now.Before(bootTime) {
-		return errors.New("system time appears to be manipulated")
+	// 时间验证
+	if a.config.Security.EnableTimeValidation {
+		bootTime := getSystemBootTime()
+
+		// 如果当前时间早于系统启动时间，说明系统时间被篡改
+		if now.Before(bootTime) {
+			return NewSecurityError(ErrTimeManipulation, "system time appears to be manipulated", nil).
+				WithDetail("current_time", now).
+				WithDetail("boot_time", bootTime)
+		}
+
+		// 检查时钟偏差
+		if a.config.Security.MaxClockSkew > 0 {
+			// 这里可以与网络时间服务器对比，简化实现假设系统时间准确
+			maxSkew := a.config.Security.MaxClockSkew
+			if now.Before(cert.NotBefore.Add(-maxSkew)) || now.After(cert.NotAfter.Add(maxSkew)) {
+				return NewSecurityError(ErrSystemClockSkew, "certificate time validation failed with clock skew check", nil).
+					WithDetail("current_time", now).
+					WithDetail("cert_not_before", cert.NotBefore).
+					WithDetail("cert_not_after", cert.NotAfter).
+					WithDetail("max_skew", maxSkew)
+			}
+		}
 	}
 
-	// 检查证书有效期
+	// 检查证书基本有效期
 	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-		return errors.New("certificate time validation failed")
+		return NewCertificateError(ErrExpiredCertificate, "certificate is not valid at current time", nil).
+			WithDetail("current_time", now).
+			WithDetail("cert_not_before", cert.NotBefore).
+			WithDetail("cert_not_after", cert.NotAfter)
 	}
 
 	// 检查证书是否被吊销
 	if revoked, reason := a.revokeManager.IsRevoked(cert.SerialNumber.String()); revoked {
-		return fmt.Errorf("certificate has been revoked: %s", reason)
+		return NewSecurityError(ErrCertificateRevoked, "certificate has been revoked", nil).
+			WithDetail("serial_number", cert.SerialNumber.String()).
+			WithDetail("revoke_reason", reason)
 	}
 
 	return nil
@@ -410,47 +372,101 @@ func (a *Authorizer) validateCertificateValidity(cert *x509.Certificate) error {
 // validateVersionInfo 检查版本信息
 func (a *Authorizer) validateVersionInfo(cert *x509.Certificate) error {
 	var versionInfo VersionInfo
+	found := false
+
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(a.getOID(3)) {
 			if _, err := asn1.Unmarshal(ext.Value, &versionInfo); err != nil {
-				return fmt.Errorf("failed to unmarshal version info: %v", err)
+				return NewCertificateError(ErrInvalidCertificate, "failed to unmarshal version info", err)
 			}
+			found = true
 			break
 		}
 	}
 
+	if !found {
+		return NewValidationError(ErrMissingRequiredField, "version information extension not found in certificate", nil)
+	}
+
 	// 检查程序版本是否满足要求
-	if a.currentVersion != "0.0.0" {
+	if a.currentVersion != "0.0.0" && a.currentVersion != "dev" && a.currentVersion != "test" {
 		if versionInfo.MinRequiredVersion == "" {
-			return errors.New("version information is missing in the certificate")
+			return NewValidationError(ErrInvalidVersion, "version information is missing in the certificate", nil)
 		}
 
-		// 这里可以增加对版本格式的检查
+		// 验证版本格式
 		if _, err := parse(versionInfo.MinRequiredVersion); err != nil {
-			return fmt.Errorf("invalid version format: %s", versionInfo.MinRequiredVersion)
+			return NewValidationError(ErrInvalidVersion, "invalid version format in certificate", err).
+				WithDetail("certificate_version", versionInfo.MinRequiredVersion)
 		}
 
+		// 比较版本
 		ok, err := compare(a.currentVersion, "<", versionInfo.MinRequiredVersion)
 		if err != nil {
-			return fmt.Errorf("version comparison error: %v", err)
+			return NewValidationError(ErrInvalidVersion, "version comparison error", err).
+				WithDetail("current_version", a.currentVersion).
+				WithDetail("required_version", versionInfo.MinRequiredVersion)
 		}
 		if ok {
-			return fmt.Errorf("program version %s is lower than required version %s", a.currentVersion, versionInfo.MinRequiredVersion)
+			return NewValidationError(ErrInvalidVersion, "program version is too old", nil).
+				WithDetail("current_version", a.currentVersion).
+				WithDetail("required_version", versionInfo.MinRequiredVersion).
+				WithSuggestion("请更新程序到最新版本")
 		}
 	}
 
 	// 证书格式版本检查
 	if versionInfo.CertVersion != currentCertVersion {
-		return fmt.Errorf("certificate format version %s does not match current version %s", versionInfo.CertVersion, currentCertVersion)
+		return NewCertificateError(ErrInvalidCertificate, "certificate format version mismatch", nil).
+			WithDetail("certificate_version", versionInfo.CertVersion).
+			WithDetail("current_version", currentCertVersion).
+			WithSuggestion("请使用匹配的证书格式版本")
 	}
 
 	// 检查证书是否超过最大有效期
-	maxValidDuration := time.Duration(versionInfo.MaxValidDays) * 24 * time.Hour
-	if time.Since(cert.NotBefore) > maxValidDuration {
-		return errors.New("certificate has exceeded maximum valid duration")
+	if versionInfo.MaxValidDays > 0 {
+		maxValidDuration := time.Duration(versionInfo.MaxValidDays) * 24 * time.Hour
+		if time.Since(cert.NotBefore) > maxValidDuration {
+			return NewCertificateError(ErrExpiredCertificate, "certificate has exceeded maximum valid duration", nil).
+				WithDetail("cert_age", time.Since(cert.NotBefore)).
+				WithDetail("max_valid_duration", maxValidDuration)
+		}
 	}
 
 	return nil
+}
+
+// validateMachineID 验证机器ID
+func (a *Authorizer) validateMachineID(cert *x509.Certificate, machineID string) error {
+	if machineID == "" {
+		return NewValidationError(ErrInvalidMachineID, "machine ID cannot be empty", nil)
+	}
+
+	// 查找机器ID扩展
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(a.getOID(1)) {
+			var certMachineID string
+			if _, err := asn1.Unmarshal(ext.Value, &certMachineID); err != nil {
+				return NewCertificateError(ErrInvalidCertificate, "failed to unmarshal machine ID from certificate", err)
+			}
+
+			// 分割证书中的机器码列表并验证
+			authorizedIDs := strings.Split(strings.TrimSpace(certMachineID), ",")
+			for _, id := range authorizedIDs {
+				if strings.TrimSpace(id) == machineID {
+					return nil // 找到匹配的机器ID
+				}
+			}
+
+			// 未找到匹配的机器ID
+			return NewSecurityError(ErrUnauthorizedAccess, "machine ID not authorized for this certificate", nil).
+				WithDetail("provided_machine_id", machineID).
+				WithDetail("authorized_machine_ids", authorizedIDs).
+				WithSuggestion("确认机器码是否正确，或联系管理员重新签发证书")
+		}
+	}
+
+	return NewCertificateError(ErrInvalidCertificate, "machine ID extension not found in certificate", nil)
 }
 
 // GenerateCA 生成新的CA证书和私钥，并更新授权管理器
@@ -655,4 +671,92 @@ func generateSKI(pubKey *rsa.PublicKey) []byte {
 	h := sha1.New()
 	h.Write(pubKeyDER)
 	return h.Sum(nil)
+}
+
+// createCertificateTemplate 创建证书模板
+func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, privateKey *rsa.PrivateKey) *x509.Certificate {
+	// 构建主体信息
+	subject := pkix.Name{
+		CommonName:   req.Company.Name,
+		Organization: []string{req.Company.Name},
+	}
+
+	if req.Company.Department != "" {
+		subject.OrganizationalUnit = []string{req.Company.Department}
+	}
+
+	if req.Company.Address != nil {
+		if req.Company.Address.Country != "" {
+			subject.Country = []string{req.Company.Address.Country}
+		}
+		if req.Company.Address.Province != "" {
+			subject.Province = []string{req.Company.Address.Province}
+		}
+		if req.Company.Address.City != "" {
+			subject.Locality = []string{req.Company.Address.City}
+		}
+		if req.Company.Address.Street != "" {
+			subject.StreetAddress = []string{req.Company.Address.Street}
+		}
+	}
+
+	return &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               subject,
+		NotBefore:             time.Now(),
+		NotAfter:              req.Identity.ExpiryDate,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+}
+
+// addCertificateExtensions 添加证书扩展
+func (a *Authorizer) addCertificateExtensions(template *x509.Certificate, req *ClientCertRequest) error {
+	var extensions []pkix.Extension
+
+	// 添加机器码扩展
+	machineIDValue, err := asn1.Marshal(req.Identity.MachineID)
+	if err != nil {
+		return NewCertificateError(ErrInvalidCertificate, "failed to marshal machine ID", err)
+	}
+	extensions = append(extensions, pkix.Extension{
+		Id:       a.getOID(1), // 1: machineID
+		Critical: false,
+		Value:    machineIDValue,
+	})
+
+	// 添加联系信息扩展（如果提供）
+	if req.Contact != nil {
+		// 直接存储结构化的联系信息
+		contactValue, err := asn1.Marshal(*req.Contact)
+		if err != nil {
+			return NewCertificateError(ErrInvalidCertificate, "failed to marshal contact info", err)
+		}
+		extensions = append(extensions, pkix.Extension{
+			Id:       a.getOID(2), // 2: contact
+			Critical: false,
+			Value:    contactValue,
+		})
+	}
+
+	// 添加版本信息扩展
+	versionInfo := VersionInfo{
+		MinRequiredVersion: req.Technical.Version,
+		CertVersion:        currentCertVersion,
+		MaxValidDays:       req.Technical.ValidityPeriodDays,
+	}
+	versionValue, err := asn1.Marshal(versionInfo)
+	if err != nil {
+		return NewCertificateError(ErrInvalidCertificate, "failed to marshal version info", err)
+	}
+	extensions = append(extensions, pkix.Extension{
+		Id:       a.getOID(3), // 3: version
+		Critical: false,
+		Value:    versionValue,
+	})
+
+	template.ExtraExtensions = extensions
+	return nil
 }

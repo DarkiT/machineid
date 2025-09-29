@@ -1,24 +1,8 @@
 package cert
 
 import (
-	"crypto/rsa"
-	"crypto/x509"
-	"sync"
 	"time"
 )
-
-// Authorizer 授权管理器
-type Authorizer struct {
-	mu             sync.RWMutex      // 读写互斥锁，用于并发安全
-	caCert         *x509.Certificate // CA证书对象
-	caKey          *rsa.PrivateKey   // CA私钥对象
-	caCertPEM      []byte            // PEM格式的CA证书数据
-	caKeyPEM       []byte            // PEM格式的CA私钥数据
-	initialized    bool              // 初始化状态标志
-	revokeManager  *RevokeManager    // 证书吊销管理器
-	currentVersion string            // 当前程序版本号，用于版本控制和更新管理
-	enterpriseID   int               // 企业标识符
-}
 
 // ClientInfo 客户端信息
 type ClientInfo struct {

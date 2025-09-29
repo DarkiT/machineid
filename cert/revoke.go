@@ -102,8 +102,10 @@ func (rm *RevokeManager) IsRevoked(serialNumber string) (bool, string) {
 	}
 
 	// 检查当前版本是否满足最低版本要求
-	if rm.currentVer < rm.revokeList.MinVersion {
-		return true, "program version too old"
+	if rm.revokeList.MinVersion != "" && rm.currentVer != "" {
+		if ok, err := compare(rm.currentVer, "<", rm.revokeList.MinVersion); err == nil && ok {
+			return true, "program version too old"
+		}
 	}
 
 	return false, ""
