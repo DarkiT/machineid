@@ -4,6 +4,8 @@
 package machineid
 
 import (
+	"os"
+
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -21,4 +23,36 @@ func machineID() (string, error) {
 		return "", err
 	}
 	return s, nil
+}
+
+// isContainerEnvironment Windows下的容器检测
+func isContainerEnvironment() bool {
+	// Windows容器检测相对简单，主要检查环境变量
+	envVars := []string{
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+		"SERVER_NAME", // Windows容器常用
+	}
+
+	for _, envVar := range envVars {
+		if value := os.Getenv(envVar); value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func getContainerID() string {
+	envVars := []string{
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+		"HOSTNAME",
+	}
+
+	for _, envVar := range envVars {
+		if value := os.Getenv(envVar); value != "" && len(value) >= 12 {
+			return value
+		}
+	}
+	return ""
 }

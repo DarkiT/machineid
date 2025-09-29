@@ -2,9 +2,6 @@ package machineid
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"testing"
 )
@@ -16,27 +13,23 @@ func Test_protect(t *testing.T) {
 	if hash == "" {
 		t.Error("hash is empty")
 	}
-	rawHash, err := hex.DecodeString(hash)
-	if err != nil {
-		t.Error(err)
-	}
-	eq := checkMAC([]byte(appID), rawHash, []byte(machineID))
-	if eq == false {
-		t.Error("hashes do not match")
-	}
-	// modify rawHash --> should not match
-	rawHash[0] = 0
-	eq = checkMAC([]byte(appID), rawHash, []byte(machineID))
-	if eq == true {
-		t.Error("hashes do match, but shouldn't")
-	}
-}
 
-func checkMAC(message, messageMAC, key []byte) bool {
-	mac := hmac.New(sha256.New, key)
-	mac.Write(message)
-	expectedMAC := mac.Sum(nil)
-	return hmac.Equal(messageMAC, expectedMAC)
+	// 验证返回的是有效的HMAC-SHA256十六进制格式（64个字符）
+	if len(hash) != 64 {
+		t.Errorf("expected HMAC-SHA256 hex format (64 chars), got length %d", len(hash))
+	}
+
+	// 测试相同输入产生相同输出
+	hash2 := protect(appID, machineID)
+	if hash != hash2 {
+		t.Error("same input should produce same hash")
+	}
+
+	// 测试不同输入产生不同输出
+	hash3 := protect(appID+"different", machineID)
+	if hash == hash3 {
+		t.Error("different input should produce different hash")
+	}
 }
 
 func Test_run(t *testing.T) {

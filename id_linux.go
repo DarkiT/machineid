@@ -70,11 +70,59 @@ func machineID() (string, error) {
 }
 
 func getContainerID() string {
-	containerID := ""
+	// 尝试多种方法检测容器ID
+
+	// 方法1：检查 /proc/self/cgroup
+	if id := getContainerIDFromCgroup(); id != "" {
+		return id
+	}
+
+	// 方法2：检查 /proc/self/mountinfo
+	if id := getContainerIDFromMountinfo(); id != "" {
+		return id
+	}
+
+	// 方法3：检查环境变量
+	if id := getContainerIDFromEnv(); id != "" {
+		return id
+	}
+
+	return ""
+}
+
+func getContainerIDFromCgroup() string {
+	content, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "docker") || strings.Contains(line, "containerd") ||
+			strings.Contains(line, "containers") || strings.Contains(line, "sandbox") {
+			// 提取容器ID
+			parts := strings.Split(line, "/")
+			for _, part := range parts {
+				// 清理docker前缀
+				if strings.HasPrefix(part, "docker-") {
+					part = strings.TrimPrefix(part, "docker-")
+					part = strings.TrimSuffix(part, ".scope")
+				}
+				if len(part) == 64 && isHexString(part) {
+					return part
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func getContainerIDFromMountinfo() string {
 	content, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return containerID
+		return ""
 	}
+
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
 		field := strings.Split(line, " ")
@@ -86,30 +134,52 @@ func getContainerID() string {
 			continue
 		}
 
-		if strings.Index(cgroup_path, "/docker/") == -1 &&
-			strings.Index(cgroup_path, "/containers/") == -1 &&
-			strings.Index(cgroup_path, "/containerd/") == -1 &&
-			strings.Index(cgroup_path, "/sandboxes/") == -1 {
+		if !strings.Contains(cgroup_path, "/docker/") &&
+			!strings.Contains(cgroup_path, "/containers/") &&
+			!strings.Contains(cgroup_path, "/containerd/") &&
+			!strings.Contains(cgroup_path, "/sandboxes/") {
 			continue
 		}
 
 		pos := strings.Split(cgroup_path, "/")
-
-		if len(pos) < 2 {
-			continue
-		}
-
-		for _, containerID = range pos {
-			docker_str := "docker-"
-			if strings.Index(containerID, docker_str) > 0 {
-				containerID = strings.ReplaceAll(containerID, docker_str, "")
+		for _, containerID := range pos {
+			if strings.HasPrefix(containerID, "docker-") {
+				containerID = strings.TrimPrefix(containerID, "docker-")
+				containerID = strings.TrimSuffix(containerID, ".scope")
 			}
-			if len(containerID) == 64 {
+			if len(containerID) == 64 && isHexString(containerID) {
 				return containerID
 			}
 		}
 	}
-	return containerID
+	return ""
+}
+
+func getContainerIDFromEnv() string {
+	// 检查常见的容器环境变量
+	envVars := []string{
+		"HOSTNAME",
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+		"POD_NAME",
+	}
+
+	for _, envVar := range envVars {
+		if value := os.Getenv(envVar); value != "" && len(value) == 64 && isHexString(value) {
+			return value
+		}
+	}
+	return ""
+}
+
+// isHexString 检查字符串是否为有效的十六进制字符串
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func dockerEnvExist(_path string) bool {
@@ -117,4 +187,14 @@ func dockerEnvExist(_path string) bool {
 		return false
 	}
 	return true
+}
+
+// isContainerEnvironment 检查是否在容器环境中运行
+func isContainerEnvironment() bool {
+	// 检查容器环境标识文件
+	if dockerEnvExist("/.dockerenv") || dockerEnvExist("/.dockerinit") {
+		return true
+	}
+	// 检查是否能获取到容器ID
+	return getContainerID() != ""
 }

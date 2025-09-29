@@ -3,12 +3,11 @@ package machineid
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // run wraps `exec.Command` with easy access to stdout and stderr.
@@ -24,7 +23,8 @@ func run(stdout, stderr io.Writer, cmd string, args ...string) error {
 func protect(appID, id string) string {
 	mac := hmac.New(sha256.New, []byte(id))
 	mac.Write([]byte(appID))
-	return strings.ToUpper(uuid.NewSHA1(uuid.NameSpaceDNS, mac.Sum(nil)).String())
+	// 直接返回十六进制编码的HMAC-SHA256结果，更安全且一致
+	return strings.ToUpper(fmt.Sprintf("%x", mac.Sum(nil)))
 }
 
 func readFile(filename string) ([]byte, error) {

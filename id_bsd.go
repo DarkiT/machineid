@@ -41,3 +41,39 @@ func readKenv() (string, error) {
 	}
 	return trim(buf.String()), nil
 }
+
+// isContainerEnvironment BSD下的容器检测
+func isContainerEnvironment() bool {
+	// 检查Docker环境标识
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	// 检查环境变量
+	envVars := []string{
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+	}
+
+	for _, envVar := range envVars {
+		if value := os.Getenv(envVar); value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func getContainerID() string {
+	envVars := []string{
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+		"HOSTNAME",
+	}
+
+	for _, envVar := range envVars {
+		if value := os.Getenv(envVar); value != "" && len(value) >= 12 {
+			return value
+		}
+	}
+	return ""
+}
