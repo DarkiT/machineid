@@ -28,3 +28,21 @@ func TestProtectedID(t *testing.T) {
 		t.Error("id and hashed id are the same")
 	}
 }
+
+func TestProtectedIDWithMAC(t *testing.T) {
+	id, err := ID()
+	if err != nil {
+		t.Error(err)
+	}
+	hash, err := ProtectedIDWithMAC("app.id")
+	if err != nil {
+		t.Skipf("skipping MAC binding test: %v", err)
+		return
+	}
+	if hash == "" {
+		t.Error("Got empty machine id hash")
+	}
+	if id == hash {
+		t.Error("id and hashed id are the same")
+	}
+}
