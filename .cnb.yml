@@ -5,24 +5,35 @@ $:
         tags: cnb:arch:amd64
       docker:
         image: docker.cnb.cool/zishuo/default-dev-env:latest
-      imports: https://cnb.cool/zishuo/system-env/-/blob/main/scripts/envs.yml
+      imports: https://cnb.cool/zishuo/system-env/-/blob/main/envs/init.yml
+      env:
+        GOBUILD_WELCOME_CMD: |
+          init-ai-config
       services:
         - vscode
-        - docker
+        - name: docker
+          options:
+            rootlessBuildkitd:
+              enabled: true
       stages:
-        - name: Start Runit
-          script: setsid runsvdir /etc/service >/dev/null 2>&1 &
-        - name: Start MCPTools
-          script: npx claude-code-templates --analytics >/dev/null 2>&1 &
-        - name: Reset AIConfig
+        - name: Install Tools or Plugins
           script: |
-            cp -af /workspace/.claude-conf /root/.claude >/dev/null 2>&1 &
-            cp -af /workspace/.aws /root/.aws >/dev/null 2>&1 &
-            cp -af /workspace/.claude.json /root/.claude.json >/dev/null 2>&1 &
-            rm -rf /workspace/.claude /workspace/.aws /workspace/.claude.json
-      endStages:
-        - name: Backup AIConfig
+            if [ -e "/workspace/.scripts/install.sh" ]; then
+                bash /workspace/.scripts/install.sh
+            fi
+        - name: Wait for Vscode
+          type: vscode:go
+        - name: Claude Code Update
           script: |
-            cp -af /root/.claude /workspace/.claude-conf >/dev/null 2>&1 &
-            cp -af /root/.aws /workspace/.aws  >/dev/null 2>&1 &
-            cp -af /root/.claude.json /workspace/.claude.json  >/dev/null 2>&1 &
+            claude update
+        - name: OpenAI Codex Update
+          script: |
+            bun install -g @openai/codex@latest
+        - name: Install MCP Tools
+          script: |
+            uv tool install --from git+https://github.com/oraios/serena serena-agent
+            uv tool install --from git+https://github.com/sparfenyuk/mcp-proxy mcp-proxy
+            bun install -g tdd-guard@latest
+            bun install -g mcp-remote@latest
+            bun install -g repomix@latest
+            bun install -g @fission-ai/openspec@latest

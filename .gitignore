@@ -78,7 +78,7 @@ secrets.yaml
 tmp/
 
 # 调试文件
-debug
+./debug/
 __debug_bin
 debug.test
 
@@ -147,6 +147,8 @@ docs/site/
 config.local.yaml
 config.local.json
 settings.local.json
+repomix.config.json
+.repomixignore
 
 # 性能分析文件
 cpu.prof
@@ -171,9 +173,6 @@ Dockerfile.dev
 docker-compose.override.yml
 .dockerignore
 
-# GitHub 相关
-.github/
-
 # 监控和日志
 prometheus.yml
 grafana/
@@ -195,4 +194,5 @@ grafana/
 .gemini
 .mcp.json
 CLAUDE.md
+CLAUDE_CN.md
 AGENTS.md
