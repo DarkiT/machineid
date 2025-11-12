@@ -1,6 +1,10 @@
 package cert
 
 import (
+	"crypto/dsa" // nolint:staticcheck // 需要支持识别旧的 DSA 证书
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -160,9 +164,27 @@ func (ci *CertificateInspector) calculateFingerprint(cert *x509.Certificate) str
 
 // getKeySize 获取密钥大小
 func (ci *CertificateInspector) getKeySize(cert *x509.Certificate) int {
-	// 这里需要根据公钥类型来确定大小
-	// 简化实现
-	return 2048 // 默认值
+	if cert.PublicKey == nil {
+		return 0
+	}
+
+	switch pub := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		// RSA 密钥大小（位数）
+		return pub.N.BitLen()
+	case *ecdsa.PublicKey:
+		// ECDSA 密钥大小（曲线参数的位数）
+		return pub.Curve.Params().BitSize
+	case ed25519.PublicKey:
+		// Ed25519 固定 256 位
+		return 256
+	case *dsa.PublicKey:
+		// DSA 密钥大小（P 参数的位数）
+		return pub.P.BitLen()
+	default:
+		// 未知类型返回 0
+		return 0
+	}
 }
 
 // SystemInfoCollector 系统信息收集器
@@ -174,8 +196,8 @@ func NewSystemInfoCollector() *SystemInfoCollector {
 }
 
 // GetSystemInfo 获取系统信息
-func (sic *SystemInfoCollector) GetSystemInfo() map[string]interface{} {
-	info := make(map[string]interface{})
+func (sic *SystemInfoCollector) GetSystemInfo() map[string]any {
+	info := make(map[string]any)
 
 	info["os"] = runtime.GOOS
 	info["arch"] = runtime.GOARCH
@@ -189,8 +211,8 @@ func (sic *SystemInfoCollector) GetSystemInfo() map[string]interface{} {
 }
 
 // getNetworkInterfaces 获取网络接口信息
-func (sic *SystemInfoCollector) getNetworkInterfaces() []map[string]interface{} {
-	var interfaces []map[string]interface{}
+func (sic *SystemInfoCollector) getNetworkInterfaces() []map[string]any {
+	var interfaces []map[string]any
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -198,7 +220,7 @@ func (sic *SystemInfoCollector) getNetworkInterfaces() []map[string]interface{} 
 	}
 
 	for _, iface := range ifaces {
-		ifaceInfo := map[string]interface{}{
+		ifaceInfo := map[string]any{
 			"name":          iface.Name,
 			"hardware_addr": iface.HardwareAddr.String(),
 			"flags":         iface.Flags.String(),
@@ -323,12 +345,13 @@ func IsValidMachineID(machineID string) bool {
 
 		// 检查是否只包含字母、数字、连字符
 		for _, char := range id {
-			if !((char >= 'A' && char <= 'Z') ||
-				(char >= 'a' && char <= 'z') ||
-				(char >= '0' && char <= '9') ||
-				char == '-' || char == '_') {
-				return false
+			isAlphaUpper := char >= 'A' && char <= 'Z'
+			isAlphaLower := char >= 'a' && char <= 'z'
+			isDigit := char >= '0' && char <= '9'
+			if isAlphaUpper || isAlphaLower || isDigit || char == '-' || char == '_' {
+				continue
 			}
+			return false
 		}
 	}
 

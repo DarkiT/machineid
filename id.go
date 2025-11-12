@@ -20,22 +20,65 @@
 package machineid // import "github.com/darkit/machineid"
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	cacheMu      sync.RWMutex
-	cachedID     string
-	cachedError  error
-	cacheTime    time.Time
-	cacheTTL     = 5 * time.Minute // 缓存5分钟
-	macCacheMu   sync.RWMutex
-	cachedMAC    string
-	macCacheTime time.Time
+	cacheMu     sync.RWMutex
+	cachedID    string
+	cachedError error
+	cacheTime   time.Time
+	cacheTTL    = 5 * time.Minute // 缓存5分钟
+
+	macCacheMu         sync.RWMutex
+	macCacheValue      *MACInfo
+	macCacheErr        error
+	macCacheTime       time.Time
+	macCacheSuccessTTL = 5 * time.Minute
+	macCacheFailureTTL = 10 * time.Second
+
+	fingerprintStatusProvider = GetHardwareFingerprintStatus
+	macResolver               = resolveMACAddr
+	idProvider                = ID
 )
+
+// BindingMode 表示保护ID最终采用的绑定模式
+type BindingMode string
+
+const (
+	BindingModeFingerprint BindingMode = "fingerprint"
+	BindingModeMAC         BindingMode = "mac"
+	BindingModeMachineID   BindingMode = "machine_id"
+)
+
+// BindingResult 描述生成保护ID时采用的模式与降级原因
+type BindingResult struct {
+	Hash             string
+	Mode             BindingMode
+	FingerprintError error
+	MACError         error
+}
+
+// FingerprintStatus 描述硬件指纹的值与稳定性
+type FingerprintStatus struct {
+	Value  string
+	Stable bool
+}
+
+// MACInfo 描述筛选到的 MAC 地址与其稳定性
+type MACInfo struct {
+	Address string
+	Stable  bool
+	Iface   string
+}
 
 // ID returns the platform specific machine id of the current host OS.
 // Regard the returned id as "confidential" and consider using ProtectedID() instead.
@@ -78,109 +121,221 @@ func ID() (string, error) {
 // 2. MAC address binding (fallback)
 // 3. Pure machine ID (basic)
 func ProtectedID(appID string) (string, error) {
+	result, err := ProtectedIDResult(appID)
+	if err != nil {
+		return "", err
+	}
+	return result.Hash, nil
+}
+
+// ProtectedIDResult 返回包含详细绑定信息的结果
+func ProtectedIDResult(appID string) (*BindingResult, error) {
 	return protectedIDWithPriority(appID, false)
 }
 
 // ProtectedIDWithMAC returns a hashed version of the machine ID bound to MAC address.
 // Deprecated: Use ProtectedID instead, which intelligently handles hardware binding.
 func ProtectedIDWithMAC(appID string) (string, error) {
+	result, err := protectedIDWithPriority(appID, true)
+	if err != nil {
+		return "", err
+	}
+	return result.Hash, nil
+}
+
+// ProtectedIDWithMACResult 返回强制 MAC 绑定模式下的详细结果
+func ProtectedIDWithMACResult(appID string) (*BindingResult, error) {
 	return protectedIDWithPriority(appID, true)
 }
 
 // protectedIDWithPriority 智能优先级处理的保护ID生成
-func protectedIDWithPriority(appID string, forceMACBinding bool) (string, error) {
-	id, err := ID()
+func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult, error) {
+	id, err := idProvider()
 	if err != nil {
-		return "", fmt.Errorf("machineid: %v", err)
+		return nil, fmt.Errorf("machineid: %v", err)
 	}
 
-	// 如果强制要求MAC绑定，或者硬件指纹不可用时，尝试MAC绑定
-	if forceMACBinding {
-		if macAddr := getMACAddr(); macAddr != "" {
-			combined := fmt.Sprintf("%s/%s", appID, macAddr)
-			return protect(combined, id), nil
-		}
-	} else {
-		// 智能优先级处理
-		// 1. 尝试硬件指纹（如果支持）
-		if fingerprint, err := GetHardwareFingerprint(); err == nil && fingerprint != "" {
-			combined := fmt.Sprintf("%s/%s/%s", appID, id, fingerprint)
-			return protect(combined, id), nil
-		}
+	result := &BindingResult{}
 
-		// 2. 回退到MAC地址绑定
-		if macAddr := getMACAddr(); macAddr != "" {
-			combined := fmt.Sprintf("%s/%s", appID, macAddr)
-			return protect(combined, id), nil
+	// 尝试硬件指纹
+	if !forceMACBinding {
+		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil {
+			if fpStatus.Stable && fpStatus.Value != "" {
+				combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
+				result.Hash = protect(combined, id)
+				result.Mode = BindingModeFingerprint
+				return result, nil
+			}
+			result.FingerprintError = fmt.Errorf("hardware fingerprint unstable")
+		} else if fpErr != nil {
+			result.FingerprintError = fpErr
 		}
+	}
+
+	// 如果要求MAC绑定或指纹失败，则尝试MAC
+	if macInfo, macErr := macResolver(); macErr == nil && macInfo != nil {
+		if forceMACBinding && !macInfo.Stable {
+			return nil, fmt.Errorf("machineid: no stable MAC address available")
+		}
+		if macInfo.Stable {
+			combined := fmt.Sprintf("%s/%s", appID, macInfo.Address)
+			result.Hash = protect(combined, id)
+			result.Mode = BindingModeMAC
+			return result, nil
+		}
+		result.MACError = fmt.Errorf("unstable MAC address detected")
+	} else if macErr != nil {
+		result.MACError = macErr
+		if forceMACBinding {
+			return nil, macErr
+		}
+	}
+
+	if forceMACBinding {
+		return nil, fmt.Errorf("machineid: unable to bind to MAC address")
 	}
 
 	// 3. 基础保护ID（纯机器码）
-	return protect(appID, id), nil
+	result.Hash = protect(appID, id)
+	result.Mode = BindingModeMachineID
+	return result, nil
 }
 
-// 获取网卡 MAC 地址，返回所有物理网卡中MAC地址最小的那个
-func getMACAddr() (macAddr string) {
-	// 检查缓存
+// 获取网卡 MAC 地址，优先返回稳定网卡
+func getMACAddr() (*MACInfo, error) {
+	return macResolver()
+}
+
+func resolveMACAddr() (*MACInfo, error) {
 	macCacheMu.RLock()
-	if time.Since(macCacheTime) < cacheTTL && cachedMAC != "" {
-		defer macCacheMu.RUnlock()
-		return cachedMAC
+	if macCacheValue != nil && time.Since(macCacheTime) < macCacheSuccessTTL {
+		info := *macCacheValue
+		macCacheMu.RUnlock()
+		return &info, nil
+	}
+	if macCacheValue == nil && macCacheErr != nil && time.Since(macCacheTime) < macCacheFailureTTL {
+		err := macCacheErr
+		macCacheMu.RUnlock()
+		return nil, err
 	}
 	macCacheMu.RUnlock()
 
-	// 获取新的MAC地址
 	macCacheMu.Lock()
 	defer macCacheMu.Unlock()
 
-	// 双重检查
-	if time.Since(macCacheTime) < cacheTTL && cachedMAC != "" {
-		return cachedMAC
+	if macCacheValue != nil && time.Since(macCacheTime) < macCacheSuccessTTL {
+		info := *macCacheValue
+		return &info, nil
+	}
+	if macCacheValue == nil && macCacheErr != nil && time.Since(macCacheTime) < macCacheFailureTTL {
+		return nil, macCacheErr
 	}
 
-	// 获取所有网络接口
-	ifas, err := net.Interfaces()
+	info, err := selectMACCandidate()
+	macCacheTime = time.Now()
 	if err != nil {
-		return ""
+		macCacheValue = nil
+		macCacheErr = err
+		return nil, err
+	}
+	macCacheValue = info
+	macCacheErr = nil
+	return info, nil
+}
+
+// selectMACCandidate 遍历网卡并挑选最优 MAC
+func selectMACCandidate() (*MACInfo, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("machineid: failed to list interfaces: %w", err)
 	}
 
-	// 用于存储找到的最小MAC地址
-	var minMACAddr string
+	var bestStable *MACInfo
+	var bestUnstable *MACInfo
 
-	// 遍历所有网卡
-	for _, iface := range ifas {
-		// 过滤条件：
-		// 1. 不是回环接口 (FlagLoopback)
-		// 2. 有MAC地址
-		// 3. 接口处于开启状态 (FlagUp)
-		// 4. 不是虚拟接口 (FlagPointToPoint)
-		if iface.Flags&net.FlagLoopback == 0 && // 不是回环接口
-			iface.HardwareAddr != nil && // 有MAC地址
-			iface.Flags&net.FlagUp != 0 && // 接口是启用的
-			iface.Flags&net.FlagPointToPoint == 0 && // 不是点对点接口（虚拟接口）
-			len(iface.HardwareAddr.String()) > 0 { // MAC地址长度大于0
+	for _, iface := range ifaces {
+		if !isInterfaceCandidate(iface) {
+			continue
+		}
 
-			currentMAC := iface.HardwareAddr.String()
+		macStr := strings.ToLower(iface.HardwareAddr.String())
+		if macStr == "" {
+			continue
+		}
 
-			// 如果是第一个找到的MAC地址，或者当前MAC地址小于已存储的最小值
-			if minMACAddr == "" || currentMAC < minMACAddr {
-				minMACAddr = currentMAC
+		normalized := normalizeMACAddress(macStr)
+		stable := inferInterfaceStability(iface)
+		candidate := &MACInfo{Address: macStr, Stable: stable, Iface: iface.Name}
+
+		if stable {
+			if bestStable == nil || normalized < normalizeMACAddress(bestStable.Address) {
+				bestStable = candidate
 			}
+			continue
+		}
+
+		if bestUnstable == nil || normalized < normalizeMACAddress(bestUnstable.Address) {
+			bestUnstable = candidate
 		}
 	}
 
-	cachedMAC = minMACAddr
-	macCacheTime = time.Now()
-	return minMACAddr
+	switch {
+	case bestStable != nil:
+		return bestStable, nil
+	case bestUnstable != nil:
+		return bestUnstable, nil
+	default:
+		return nil, errors.New("machineid: no suitable MAC address found")
+	}
+}
+
+func isInterfaceCandidate(iface net.Interface) bool {
+	if len(iface.HardwareAddr) == 0 {
+		return false
+	}
+	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		return false
+	}
+	name := strings.ToLower(iface.Name)
+	ignoredPrefixes := []string{"lo", "docker", "veth", "br-", "vmnet", "zt", "tailscale"}
+	for _, prefix := range ignoredPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeMACAddress(mac string) string {
+	return strings.ReplaceAll(mac, ":", "")
+}
+
+func inferInterfaceStability(iface net.Interface) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	assignTypePath := filepath.Join("/sys/class/net", iface.Name, "addr_assign_type")
+	data, err := os.ReadFile(assignTypePath)
+	if err != nil {
+		return true
+	}
+	typ := strings.TrimSpace(string(data))
+	return typ == "0"
 }
 
 // GetMACAddress 获取主网卡的MAC地址，提供给用户直接使用
 func GetMACAddress() (string, error) {
-	mac := getMACAddr()
-	if mac == "" {
+	macInfo, err := getMACAddr()
+	if err != nil {
+		return "", err
+	}
+	if macInfo == nil || macInfo.Address == "" {
 		return "", fmt.Errorf("machineid: no valid MAC address found")
 	}
-	return mac, nil
+	if !macInfo.Stable {
+		return "", fmt.Errorf("machineid: MAC address is not stable")
+	}
+	return macInfo.Address, nil
 }
 
 // IsContainer 检查当前程序是否运行在容器环境中
@@ -197,7 +352,8 @@ func ClearCache() {
 	cacheMu.Unlock()
 
 	macCacheMu.Lock()
-	cachedMAC = ""
+	macCacheValue = nil
+	macCacheErr = nil
 	macCacheTime = time.Time{}
 	macCacheMu.Unlock()
 
@@ -235,8 +391,8 @@ func GetInfo(appID string) (*Info, error) {
 	}
 
 	// 获取MAC地址（可选）
-	if mac := getMACAddr(); mac != "" {
-		info.MACAddress = mac
+	if macInfo, err := getMACAddr(); err == nil && macInfo != nil && macInfo.Stable {
+		info.MACAddress = macInfo.Address
 	}
 
 	// 检查容器环境

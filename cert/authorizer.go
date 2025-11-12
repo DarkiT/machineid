@@ -189,11 +189,11 @@ func (b *AuthorizerBuilder) validateConfig() error {
 		return NewConfigError(ErrInvalidCAConfig, "version cannot be empty", nil)
 	}
 
-	if b.config.CACert == nil || len(b.config.CACert) == 0 {
+	if len(b.config.CACert) == 0 {
 		return NewConfigError(ErrMissingCA, "CA certificate cannot be empty", nil)
 	}
 
-	if b.config.CAKey == nil || len(b.config.CAKey) == 0 {
+	if len(b.config.CAKey) == 0 {
 		return NewConfigError(ErrMissingCA, "CA private key cannot be empty", nil)
 	}
 

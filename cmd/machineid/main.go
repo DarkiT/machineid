@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/darkit/machineid"
 )
@@ -32,7 +33,8 @@ Try:
 `
 
 func usage() {
-	log.Fatalln(usageStr)
+	fmt.Fprint(os.Stderr, usageStr)
+	os.Exit(2)
 }
 
 func main() {

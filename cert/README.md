@@ -5,6 +5,7 @@
 ## 🚀 主要特性
 
 ### 📜 证书管理
+
 - **CA 证书生成**：支持自定义 CA 证书和私钥管理
 - **客户端证书签发**：基于机器码的证书签发系统
 - **证书验证**：完整的证书链验证和有效性检查
@@ -12,15 +13,17 @@
 - **批量处理**：支持大规模证书批量签发和验证
 
 ### 🛡️ 安全防护（可选）
-- **分级保护**：4个安全级别，从禁用到关键防护
+
+- **分级保护**：4 个安全级别，从禁用到关键防护
 - **反调试保护**：多层次调试器检测和防护机制
 - **环境检测**：虚拟机和沙箱环境识别
-- **进程保护**：DLL注入和代码注入检测
+- **进程保护**：DLL 注入和代码注入检测
 - **时间篡改检测**：系统时间验证和时钟偏差检查
 - **完整性验证**：程序完整性校验和内存保护
 - **硬件绑定**：基于机器码的硬件绑定验证
 
 ### 📊 授权管理
+
 - **版本控制**：强制版本更新和兼容性管理
 - **有效期管理**：灵活的证书生命周期控制
 - **授权管理**：完整的客户信息和联系方式管理
@@ -68,7 +71,7 @@ caInfo := cert.CAInfo{
     CommonName:   "ZStudio Software CA",
     Organization: "子说软件工作室",
     Country:      "CN",
-    Province:     "Guangdong", 
+    Province:     "Guangdong",
     Locality:     "Guangzhou",
     ValidDays:    3650, // 10年有效期
     KeySize:      4096,
@@ -99,13 +102,13 @@ req := &cert.ClientCertRequest{
         Address: &cert.Address{
             Country:  "CN",
             Province: "广东省",
-            City:     "深圳市", 
+            City:     "深圳市",
             Street:   "科技园南路",
         },
     },
     Contact: &cert.Contact{
         Person: "张三",
-        Phone:  "13800138000", 
+        Phone:  "13800138000",
         Email:  "zhangsan@example.com",
     },
     Technical: cert.Technical{
@@ -189,21 +192,21 @@ fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02 15:04:
 watchCallback := func(event cert.WatchEvent, clientInfo *cert.ClientInfo, err error) {
     switch event {
     case cert.WatchEventExpiring:
-        log.Printf("警告: 证书即将到期 - %s (%s)", 
+        log.Printf("警告: 证书即将到期 - %s (%s)",
             clientInfo.CompanyName, clientInfo.ContactPerson)
         // 发送邮件通知、触发续期流程等
         sendRenewalNotification(clientInfo)
-        
+
     case cert.WatchEventExpired:
         log.Printf("紧急: 证书已过期 - %s", clientInfo.CompanyName)
         // 停止服务、显示过期提示等
         handleExpiredLicense(clientInfo)
-        
+
     case cert.WatchEventInvalid:
         log.Printf("错误: 证书无效 - %v", err)
         // 重新验证、联系支持等
         handleInvalidCertificate(err)
-        
+
     case cert.WatchEventRevoked:
         log.Printf("严重: 证书已被吊销 - %s", clientInfo.CompanyName)
         // 立即停止服务、安全审计等
@@ -215,7 +218,7 @@ watchCallback := func(event cert.WatchEvent, clientInfo *cert.ClientInfo, err er
 watcher, err := auth.Watch(certPEM, machineID, watchCallback)
 
 // 自定义监控间隔和预警期
-watcher, err := auth.Watch(certPEM, machineID, watchCallback, 
+watcher, err := auth.Watch(certPEM, machineID, watchCallback,
     30*time.Minute,  // 30分钟检查一次
     3*24*time.Hour)  // 3天到期预警
 
@@ -235,7 +238,7 @@ if err := watcher.Start(); err != nil {
 
 // 获取监控统计
 stats := watcher.GetStats()
-fmt.Printf("检查次数: %v, 运行状态: %v\n", 
+fmt.Printf("检查次数: %v, 运行状态: %v\n",
     stats["check_count"], stats["is_running"])
 
 // 停止监控
@@ -258,7 +261,7 @@ manager.AddWatcher("license2", watcher2)
 // 获取所有监控统计
 allStats := manager.GetAllStats()
 for id, stats := range allStats {
-    fmt.Printf("%s: 检查%v次, 运行中=%v\n", 
+    fmt.Printf("%s: 检查%v次, 运行中=%v\n",
         id, stats["check_count"], stats["is_running"])
 }
 
@@ -268,12 +271,12 @@ manager.StopAll()
 
 #### 监控事件类型
 
-| 事件 | 触发条件 | 建议处理 |
-|------|----------|----------|
-| **WatchEventExpiring** | 距离到期时间小于预警期 | 发送续期提醒，准备新证书 |
-| **WatchEventExpired** | 证书已过期 | 停止服务或显示过期提示 |
-| **WatchEventInvalid** | 证书格式错误或验证失败 | 检查证书文件，联系技术支持 |
-| **WatchEventRevoked** | 证书被加入吊销列表 | 立即停止服务，进行安全审计 |
+| 事件                   | 触发条件               | 建议处理                   |
+| ---------------------- | ---------------------- | -------------------------- |
+| **WatchEventExpiring** | 距离到期时间小于预警期 | 发送续期提醒，准备新证书   |
+| **WatchEventExpired**  | 证书已过期             | 停止服务或显示过期提示     |
+| **WatchEventInvalid**  | 证书格式错误或验证失败 | 检查证书文件，联系技术支持 |
+| **WatchEventRevoked**  | 证书被加入吊销列表     | 立即停止服务，进行安全审计 |
 
 #### 默认监控配置
 
@@ -281,7 +284,7 @@ manager.StopAll()
 // 系统默认配置
 config := cert.DefaultWatchConfig()
 // CheckInterval: 1小时
-// ExpiryWarningPeriod: 7天  
+// ExpiryWarningPeriod: 7天
 // EnableExpiryWarning: true
 // EnableRevocationCheck: true
 // MaxRetries: 3次
@@ -318,14 +321,14 @@ auth, err := cert.NewAuthorizer().
 
 ### 安全级别概览
 
-系统提供4个可选的安全级别，**默认完全禁用**以确保开发友好：
+系统提供 4 个可选的安全级别，**默认完全禁用**以确保开发友好：
 
-| 级别 | 名称 | 检测项 | 性能影响 | 适用场景 |
-|------|------|--------|----------|----------|
-| **0** | **禁用** | 无检测 | 无 | **开发、调试（默认）** |
-| **1** | **基础** | 简单调试器检测 | 极小 | **生产环境** |
-| **2** | **高级** | 完整反逆向保护 | 小 | **高价值软件** |
-| **3** | **关键** | 最严格检查+进程保护 | 中等 | **关键系统** |
+| 级别  | 名称     | 检测项              | 性能影响 | 适用场景               |
+| ----- | -------- | ------------------- | -------- | ---------------------- |
+| **0** | **禁用** | 无检测              | 无       | **开发、调试（默认）** |
+| **1** | **基础** | 简单调试器检测      | 极小     | **生产环境**           |
+| **2** | **高级** | 完整反逆向保护      | 小       | **高价值软件**         |
+| **3** | **关键** | 最严格检查+进程保护 | 中等     | **关键系统**           |
 
 ### 配置方式
 
@@ -350,45 +353,53 @@ auth := cert.NewAuthorizer().WithCriticalSecurity().Build() // 级别3
 
 ### 各级别详细功能
 
-#### 🔓 级别0：完全禁用（默认推荐）
+#### 🔓 级别 0：完全禁用（默认推荐）
+
 ```go
 auth := cert.ForDevelopment().Build()
 // 或
 auth := cert.NewAuthorizer().Build() // 默认就是级别0
 ```
+
 - **检测项**: 无
 - **性能**: 无影响
 - **用途**: 开发、调试、测试
 - **特点**: 完全无干扰，专注于业务逻辑开发
 
-#### 🛡️ 级别1：基础防护
+#### 🛡️ 级别 1：基础防护
+
 ```go
 auth := cert.ForProduction().Build()
 ```
-- **检测项**: 基础调试器检测（IsDebuggerPresent、TracerPid等）
+
+- **检测项**: 基础调试器检测（IsDebuggerPresent、TracerPid 等）
 - **性能**: 极小影响（~1-2ms）
 - **用途**: 生产环境基础保护
 - **特点**: 兼容性好，检测常见调试器
 
-#### 🛡️ 级别2：高级防护
+#### 🛡️ 级别 2：高级防护
+
 ```go
 auth := cert.NewAuthorizer().WithSecureDefaults().Build()
 ```
-- **检测项**: 
-  - 高级调试器检测（时间攻击、API监控）
-  - 虚拟机环境检测（VMware、VirtualBox等）
-  - 沙箱环境检测（Cuckoo、Joe Sandbox等）
+
+- **检测项**:
+  - 高级调试器检测（时间攻击、API 监控）
+  - 虚拟机环境检测（VMware、VirtualBox 等）
+  - 沙箱环境检测（Cuckoo、Joe Sandbox 等）
 - **性能**: 小影响（~5-10ms）
 - **用途**: 高价值软件保护
 - **特点**: 全面的反逆向分析保护
 
-#### 🔒 级别3：关键防护
+#### 🔒 级别 3：关键防护
+
 ```go
 auth := cert.NewAuthorizer().WithCriticalSecurity().Build()
 ```
-- **检测项**: 
-  - 所有级别2的检测项
-  - 进程保护（DLL注入、代码注入检测）
+
+- **检测项**:
+  - 所有级别 2 的检测项
+  - 进程保护（DLL 注入、代码注入检测）
   - 内存保护（关键数据加密）
   - 系统调用监控
 - **性能**: 中等影响（~10-20ms）
@@ -397,78 +408,95 @@ auth := cert.NewAuthorizer().WithCriticalSecurity().Build()
 
 ### 反调试技术详解
 
-#### 🔓 级别0 - 完全禁用（默认）
+#### 🔓 级别 0 - 完全禁用（默认）
+
 ```go
 auth := cert.NewAuthorizer().Build() // 默认级别0
 // 或显式设置
 auth := cert.NewAuthorizer().WithSecurityLevel(0).Build()
 ```
+
 - **检测项**: 无任何检测
 - **性能开销**: 0ms
 - **适用场景**: 开发、调试、单元测试
 - **特点**: 完全无干扰，专注业务逻辑开发
 
-#### 🛡️ 级别1 - 基础防护
+#### 🛡️ 级别 1 - 基础防护
+
 ```go
 auth := cert.ForProduction().Build() // 自动设为级别1
 // 或手动设置
 auth := cert.NewAuthorizer().WithBasicSecurity().Build()
 ```
-**Windows平台检测**：
+
+**Windows 平台检测**：
+
 - `IsDebuggerPresent()` - 检测调试器存在
-- PEB结构检查 - 验证`BeingDebugged`标志
+- PEB 结构检查 - 验证`BeingDebugged`标志
 - 调试堆检测 - 检查堆标志异常
 
-**Linux平台检测**：
-- TracerPid检查 - 读取`/proc/self/status`中的跟踪进程
+**Linux 平台检测**：
+
+- TracerPid 检查 - 读取`/proc/self/status`中的跟踪进程
 - 调试器进程扫描 - 检查`gdb`、`lldb`等进程
 
-**macOS平台检测**：
-- P_TRACED状态 - 通过`sysctl`检查进程跟踪状态
+**macOS 平台检测**：
+
+- P_TRACED 状态 - 通过`sysctl`检查进程跟踪状态
 - 调试器进程检测 - 扫描常见调试工具
 
 **性能开销**: 1-2ms，适合生产环境
 
-#### 🛡️ 级别2 - 高级防护  
+#### 🛡️ 级别 2 - 高级防护
+
 ```go
 auth := cert.NewAuthorizer().WithSecureDefaults().Build()
 ```
+
 **高级反调试技术**：
+
 - **时间差攻击检测** - 测量指令执行时间，检测单步调试
 - **调试端口检查** - 通过`NtQueryInformationProcess`检查调试端口（Windows）
 - **异常处理检测** - 利用异常处理机制检测调试器
 - **硬件断点检测** - 检查调试寄存器`DR0-DR7`
 
 **虚拟机检测**：
-- **VMware检测** - 检查VMware特有设备和服务
-- **VirtualBox检测** - 查找VBOX相关注册表项和文件
-- **Hyper-V检测** - 检测Microsoft虚拟化标志
-- **QEMU检测** - 识别QEMU/KVM环境特征
+
+- **VMware 检测** - 检查 VMware 特有设备和服务
+- **VirtualBox 检测** - 查找 VBOX 相关注册表项和文件
+- **Hyper-V 检测** - 检测 Microsoft 虚拟化标志
+- **QEMU 检测** - 识别 QEMU/KVM 环境特征
 
 **沙箱检测**：
-- **Cuckoo Sandbox** - 检测Cuckoo特有的文件和注册表
-- **Joe Sandbox** - 识别Joe分析环境
-- **Anubis检测** - 检查Anubis恶意软件分析平台
+
+- **Cuckoo Sandbox** - 检测 Cuckoo 特有的文件和注册表
+- **Joe Sandbox** - 识别 Joe 分析环境
+- **Anubis 检测** - 检查 Anubis 恶意软件分析平台
 
 **性能开销**: 5-10ms，适合高价值软件保护
 
-#### 🔒 级别3 - 关键防护
-```go  
+#### 🔒 级别 3 - 关键防护
+
+```go
 auth := cert.NewAuthorizer().WithCriticalSecurity().Build()
 ```
+
 **进程保护技术**：
-- **DLL注入检测** - 监控异常的内存映射和模块加载
-- **代码注入检测** - 检查可执行区域的异常变化  
+
+- **DLL 注入检测** - 监控异常的内存映射和模块加载
+- **代码注入检测** - 检查可执行区域的异常变化
 - **内存布局分析** - 检测内存映射异常
-- **API Hook检测** - 识别API拦截和重定向
+- **API Hook 检测** - 识别 API 拦截和重定向
 
 **内存保护机制**：
-- **关键数据加密** - 使用XOR等算法加密敏感内存区域
+
+- **关键数据加密** - 使用 XOR 等算法加密敏感内存区域
 - **内存权限控制** - 动态设置关键区域访问权限
 - **数据完整性校验** - 定期校验关键数据完整性
 - **内存清理** - 程序退出时安全清理敏感数据
 
 **系统监控**：
+
 - **系统调用监控** - 检测异常的系统调用模式
 - **文件系统监控** - 监控敏感文件访问
 - **网络行为分析** - 检测异常网络通信
@@ -478,49 +506,55 @@ auth := cert.NewAuthorizer().WithCriticalSecurity().Build()
 ### 检测技术分类说明
 
 #### 调试器检测
-| 技术 | 级别 | 平台 | 描述 |
-|------|------|------|------|
-| IsDebuggerPresent | 1+ | Windows | 最基础的调试器检测API |
-| PEB检查 | 1+ | Windows | 检查进程环境块中的调试标志 |
-| TracerPid | 1+ | Linux | 检查进程跟踪状态 |
-| P_TRACED | 1+ | macOS | 检查进程跟踪标志 |
-| 时间差攻击 | 2+ | 全平台 | 通过执行时间检测单步调试 |
-| 调试端口检查 | 2+ | Windows | 通过NT API检查调试端口 |
-| 异常处理检测 | 2+ | Windows | 利用结构化异常处理检测 |
-| 硬件断点检测 | 2+ | x86/x64 | 检查调试寄存器状态 |
+
+| 技术              | 级别 | 平台    | 描述                       |
+| ----------------- | ---- | ------- | -------------------------- |
+| IsDebuggerPresent | 1+   | Windows | 最基础的调试器检测 API     |
+| PEB 检查          | 1+   | Windows | 检查进程环境块中的调试标志 |
+| TracerPid         | 1+   | Linux   | 检查进程跟踪状态           |
+| P_TRACED          | 1+   | macOS   | 检查进程跟踪标志           |
+| 时间差攻击        | 2+   | 全平台  | 通过执行时间检测单步调试   |
+| 调试端口检查      | 2+   | Windows | 通过 NT API 检查调试端口   |
+| 异常处理检测      | 2+   | Windows | 利用结构化异常处理检测     |
+| 硬件断点检测      | 2+   | x86/x64 | 检查调试寄存器状态         |
 
 #### 环境检测
-| 环境类型 | 检测级别 | 检测方法 |
-|----------|----------|----------|
-| VMware | 2+ | 注册表项、设备名称、MAC地址前缀 |
-| VirtualBox | 2+ | 注册表项、文件系统、设备枚举 |
-| Hyper-V | 2+ | 系统信息、特殊标志位 |
-| QEMU/KVM | 2+ | CPUID指令、设备信息 |
-| Cuckoo沙箱 | 2+ | 特有文件、注册表、网络配置 |
-| Joe沙箱 | 2+ | 环境变量、文件系统特征 |
+
+| 环境类型    | 检测级别 | 检测方法                         |
+| ----------- | -------- | -------------------------------- |
+| VMware      | 2+       | 注册表项、设备名称、MAC 地址前缀 |
+| VirtualBox  | 2+       | 注册表项、文件系统、设备枚举     |
+| Hyper-V     | 2+       | 系统信息、特殊标志位             |
+| QEMU/KVM    | 2+       | CPUID 指令、设备信息             |
+| Cuckoo 沙箱 | 2+       | 特有文件、注册表、网络配置       |
+| Joe 沙箱    | 2+       | 环境变量、文件系统特征           |
 
 ### 环境检测技术
 
 #### 虚拟机检测
-- **VMware**: 检测VMware特有设备和注册表
-- **VirtualBox**: 检查VBOX相关特征
-- **Hyper-V**: 检测Microsoft虚拟化标志
-- **QEMU**: 检查QEMU/KVM环境特征
 
-#### 沙箱检测  
-- **Cuckoo Sandbox**: 检测Cuckoo特有的文件和环境
-- **Joe Sandbox**: 检查Joe分析环境特征
-- **Anubis**: 检测Anubis恶意软件分析环境
+- **VMware**: 检测 VMware 特有设备和注册表
+- **VirtualBox**: 检查 VBOX 相关特征
+- **Hyper-V**: 检测 Microsoft 虚拟化标志
+- **QEMU**: 检查 QEMU/KVM 环境特征
+
+#### 沙箱检测
+
+- **Cuckoo Sandbox**: 检测 Cuckoo 特有的文件和环境
+- **Joe Sandbox**: 检查 Joe 分析环境特征
+- **Anubis**: 检测 Anubis 恶意软件分析环境
 
 ### 进程保护技术
 
 #### 注入检测
-- **DLL注入**: 监控异常的内存映射和模块加载
+
+- **DLL 注入**: 监控异常的内存映射和模块加载
 - **代码注入**: 检查可执行区域的异常变化
 - **内存布局**: 分析内存布局异常
 
 #### 内存保护
-- **关键数据加密**: 使用XOR加密保护敏感内存
+
+- **关键数据加密**: 使用 XOR 加密保护敏感内存
 - **内存权限**: 设置关键区域为只读
 - **数据清理**: 程序退出时清理敏感数据
 
@@ -535,7 +569,7 @@ devAuth := cert.ForDevelopment() // SecurityLevel=0
 // 测试环境（禁用安全检查）
 testAuth := cert.ForTesting()    // SecurityLevel=0
 
-// 生产环境（基础安全检查）  
+// 生产环境（基础安全检查）
 prodAuth := cert.ForProduction() // SecurityLevel=1
 ```
 
@@ -651,7 +685,7 @@ if err != nil {
 
 - `ValidationError`: 证书验证错误（格式、过期等）
 - `SecurityError`: 安全检查错误（调试器、沙箱等）
-- `ConfigError`: 配置错误（CA缺失、参数无效等）
+- `ConfigError`: 配置错误（CA 缺失、参数无效等）
 - `SystemError`: 系统错误（时钟偏差、文件系统等）
 
 ## 🔍 监控和日志
@@ -687,12 +721,12 @@ fmt.Printf("平均验证时间: %v\n", stats.AvgValidationTime)
 func validateLicenseHandler(w http.ResponseWriter, r *http.Request) {
     certData := r.Header.Get("X-License-Cert")
     machineID := r.Header.Get("X-Machine-ID")
-    
+
     if err := auth.ValidateCert([]byte(certData), machineID); err != nil {
         http.Error(w, "License validation failed", 403)
         return
     }
-    
+
     w.WriteHeader(200)
     json.NewEncoder(w).Encode(map[string]string{"status": "valid"})
 }
@@ -713,7 +747,7 @@ service LicenseService {
 ### 最佳实践
 
 1. **使用缓存**: 启用证书验证缓存减少重复计算
-2. **批量处理**: 大规模证书操作使用批量API
+2. **批量处理**: 大规模证书操作使用批量 API
 3. **异步更新**: 吊销列表和配置使用异步更新
 4. **连接池**: 网络请求使用连接池复用
 5. **内存管理**: 及时清理不需要的证书数据
@@ -723,7 +757,7 @@ service LicenseService {
 - 证书验证: ~1-5ms（缓存命中）
 - 证书签发: ~10-50ms
 - 安全检查: ~5-20ms
-- 批量处理: 1000个证书/秒
+- 批量处理: 1000 个证书/秒
 
 ## 📋 部署指南
 
@@ -755,15 +789,15 @@ auth := cert.NewAuthorizer().
 CA 私钥是整个系统的核心，必须严格保护：
 
 - **加密存储**: 使用硬件安全模块(HSM)或加密文件系统
-- **访问控制**: 限制访问权限，使用最小权限原则  
+- **访问控制**: 限制访问权限，使用最小权限原则
 - **备份策略**: 安全的密钥备份和恢复机制
-- **定期轮换**: 定期更换CA密钥（建议2-5年）
+- **定期轮换**: 定期更换 CA 密钥（建议 2-5 年）
 - **审计日志**: 记录所有密钥使用操作
 
 ### 安全最佳实践
 
-1. **网络安全**: 使用HTTPS传输证书和验证请求
-2. **存储安全**: 加密存储敏感配置和密钥文件  
+1. **网络安全**: 使用 HTTPS 传输证书和验证请求
+2. **存储安全**: 加密存储敏感配置和密钥文件
 3. **访问控制**: 实施严格的身份认证和授权
 4. **监控告警**: 部署安全事件监控和异常告警
 5. **应急响应**: 建立证书泄露应急处理流程
@@ -773,6 +807,7 @@ CA 私钥是整个系统的核心，必须严格保护：
 ### 常见问题
 
 #### 证书验证失败
+
 ```bash
 # 检查系统时间
 ntpdate -s time.nist.gov
@@ -785,6 +820,7 @@ echo "当前机器码: $(go run -tags=cert ./cmd/get-machine-id)"
 ```
 
 #### 安全检查失败
+
 ```go
 // 临时禁用安全检查（仅用于调试）
 devAuth := cert.ForDevelopment().Build() // EnableAntiDebug=false
@@ -797,14 +833,15 @@ if err := auth.PerformSecurityCheck(); err != nil {
 
 ## 📖 API 文档
 
-完整的API文档请参阅：
+完整的 API 文档请参阅：
+
 - [GoDoc](https://pkg.go.dev/github.com/darkit/machineid/cert)
 - [示例代码](./examples.go)
 - [配置参考](./config.go)
 
 ## 🔄 版本兼容性
 
-- **Go版本**: 需要 Go 1.19+
+- **Go 版本**: 需要 Go 1.19+
 - **平台支持**: Windows, Linux, macOS
 - **架构支持**: amd64, arm64, 386
 
@@ -840,10 +877,9 @@ go run examples.go
 
 如果您遇到问题或需要帮助：
 
-- 🐛 [报告Bug](https://github.com/darkit/machineid/issues/new?template=bug_report.md)
-- 💡 [功能建议](https://github.com/darkit/machineid/issues/new?template=feature_request.md)  
-- 📧 技术支持: support@example.com
-- 📚 [Wiki文档](https://github.com/darkit/machineid/wiki)
+- 🐛 [报告 Bug](https://github.com/darkit/machineid/issues/new?template=bug_report.md)
+- 💡 [功能建议](https://github.com/darkit/machineid/issues/new?template=feature_request.md)
+- 📚 [Wiki 文档](https://github.com/darkit/machineid/wiki)
 
 ---
 

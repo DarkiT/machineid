@@ -1,7 +1,15 @@
 package cert
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
 	"time"
 )
 
@@ -439,7 +447,7 @@ func Example10_ExtractClientInfo() {
 
 // Example11_CertificateWatching 证书监控示例
 func Example11_CertificateWatching() {
-	fmt.Println("=== 证书监控功能演示 ===\n")
+	fmt.Println("=== 证书监控功能演示 ===")
 
 	// 创建授权管理器
 	auth, err := NewAuthorizer().Build()
@@ -502,7 +510,7 @@ func Example11_CertificateWatching() {
 			fmt.Printf("      到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02 15:04:05"))
 
 			// 计算剩余时间
-			timeLeft := clientInfo.ExpiryDate.Sub(time.Now())
+			timeLeft := time.Until(clientInfo.ExpiryDate)
 			if timeLeft > 0 {
 				fmt.Printf("      剩余时间: %v\n", timeLeft.Round(time.Second))
 			} else {
@@ -599,4 +607,226 @@ func Example11_CertificateWatching() {
 	fmt.Println("   3. 支持多种监控事件（到期、吊销等）")
 	fmt.Println("   4. 线程安全的监控管理器")
 	fmt.Println("   5. 详细的统计信息和错误重试机制")
+}
+
+// DemonstrateKeySizeDetection 演示密钥大小识别功能
+func DemonstrateKeySizeDetection() {
+	fmt.Println("=== 证书密钥大小识别演示 ===")
+
+	inspector := NewCertificateInspector()
+
+	// 1. 演示 RSA 密钥识别
+	fmt.Println("1. RSA 密钥识别:")
+	demonstrateRSAKeys(inspector)
+
+	// 2. 演示 ECDSA 密钥识别
+	fmt.Println()
+	fmt.Println("2. ECDSA 密钥识别:")
+	demonstrateECDSAKeys(inspector)
+
+	// 3. 演示 Ed25519 密钥识别
+	fmt.Println()
+	fmt.Println("3. Ed25519 密钥识别:")
+	demonstrateEd25519Keys(inspector)
+}
+
+// demonstrateRSAKeys 演示 RSA 密钥识别
+func demonstrateRSAKeys(inspector *CertificateInspector) {
+	rsaSizes := []int{2048, 3072, 4096}
+
+	for _, size := range rsaSizes {
+		// 生成 RSA 密钥
+		privateKey, err := rsa.GenerateKey(rand.Reader, size)
+		if err != nil {
+			fmt.Printf("   ✗ 生成 RSA-%d 密钥失败: %v\n", size, err)
+			continue
+		}
+
+		// 创建自签名证书
+		cert := createDemoCertificate(&privateKey.PublicKey)
+
+		// 检查证书信息
+		info := inspector.InspectCertificate(cert)
+
+		fmt.Printf("   ✓ RSA-%d: 检测到密钥大小 = %d bits\n", size, info.KeySize)
+		fmt.Printf("     - 主题: %s\n", info.Subject)
+		fmt.Printf("     - 签名算法: %s\n", info.SignatureAlgorithm)
+	}
+}
+
+// demonstrateECDSAKeys 演示 ECDSA 密钥识别
+func demonstrateECDSAKeys(inspector *CertificateInspector) {
+	curves := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P-224", elliptic.P224()},
+		{"P-256", elliptic.P256()},
+		{"P-384", elliptic.P384()},
+		{"P-521", elliptic.P521()},
+	}
+
+	for _, c := range curves {
+		// 生成 ECDSA 密钥
+		privateKey, err := ecdsa.GenerateKey(c.curve, rand.Reader)
+		if err != nil {
+			fmt.Printf("   ✗ 生成 ECDSA %s 密钥失败: %v\n", c.name, err)
+			continue
+		}
+
+		// 创建自签名证书
+		cert := createDemoCertificate(&privateKey.PublicKey)
+
+		// 检查证书信息
+		info := inspector.InspectCertificate(cert)
+
+		fmt.Printf("   ✓ ECDSA %s: 检测到密钥大小 = %d bits\n", c.name, info.KeySize)
+		fmt.Printf("     - 主题: %s\n", info.Subject)
+		fmt.Printf("     - 签名算法: %s\n", info.SignatureAlgorithm)
+	}
+}
+
+// demonstrateEd25519Keys 演示 Ed25519 密钥识别
+func demonstrateEd25519Keys(inspector *CertificateInspector) {
+	// 生成 Ed25519 密钥
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		fmt.Printf("   ✗ 生成 Ed25519 密钥失败: %v\n", err)
+		return
+	}
+
+	// 创建自签名证书
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   "Ed25519 Demo Certificate",
+			Organization: []string{"Certificate Demo"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
+	if err != nil {
+		fmt.Printf("   ✗ 创建证书失败: %v\n", err)
+		return
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		fmt.Printf("   ✗ 解析证书失败: %v\n", err)
+		return
+	}
+
+	// 检查证书信息
+	info := inspector.InspectCertificate(cert)
+
+	fmt.Printf("   ✓ Ed25519: 检测到密钥大小 = %d bits (固定大小)\n", info.KeySize)
+	fmt.Printf("     - 主题: %s\n", info.Subject)
+	fmt.Printf("     - 签名算法: %s\n", info.SignatureAlgorithm)
+}
+
+// createDemoCertificate 创建演示用的自签名证书
+func createDemoCertificate(publicKey any) *x509.Certificate {
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   "Demo Certificate",
+			Organization: []string{"Certificate Demo"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	var privateKey any
+	switch pub := publicKey.(type) {
+	case *rsa.PublicKey:
+		privateKey, _ = rsa.GenerateKey(rand.Reader, pub.N.BitLen())
+	case *ecdsa.PublicKey:
+		privateKey, _ = ecdsa.GenerateKey(pub.Curve, rand.Reader)
+	}
+
+	certDER, _ := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
+	cert, _ := x509.ParseCertificate(certDER)
+
+	return cert
+}
+
+// TestSecurityLevels 测试安全级别配置
+func TestSecurityLevels() {
+	fmt.Println("🧪 安全级别配置测试")
+
+	// 测试默认配置（应该是禁用）
+	fmt.Println("测试1: 默认配置")
+	defaultAuth, _ := NewAuthorizer().Build()
+	level := defaultAuth.getSecurityLevel()
+	fmt.Printf("   默认安全级别: %d (期望: 0)\n", level)
+	if level == 0 {
+		fmt.Println("   ✅ 通过: 默认禁用安全检查")
+	} else {
+		fmt.Println("   ❌ 失败: 应该默认禁用")
+	}
+
+	// 测试显式设置
+	fmt.Println("\n测试2: 显式设置安全级别")
+	explicitAuth, _ := NewAuthorizer().WithSecurityLevel(2).Build()
+	level = explicitAuth.getSecurityLevel()
+	fmt.Printf("   显式设置级别: %d (期望: 2)\n", level)
+	if level == 2 {
+		fmt.Println("   ✅ 通过: 显式设置生效")
+	} else {
+		fmt.Println("   ❌ 失败: 显式设置无效")
+	}
+
+	// 测试预设配置
+	fmt.Println("\n测试3: 预设配置")
+	devAuth, _ := ForDevelopment().Build()
+	prodAuth, _ := ForProduction().Build()
+
+	devLevel := devAuth.getSecurityLevel()
+	prodLevel := prodAuth.getSecurityLevel()
+
+	fmt.Printf("   开发环境级别: %d (期望: 0)\n", devLevel)
+	fmt.Printf("   生产环境级别: %d (期望: 1)\n", prodLevel)
+
+	if devLevel == 0 && prodLevel == 1 {
+		fmt.Println("   ✅ 通过: 预设配置正确")
+	} else {
+		fmt.Println("   ❌ 失败: 预设配置错误")
+	}
+
+	// 测试安全检查行为
+	fmt.Println("\n测试4: 安全检查行为")
+
+	// 禁用状态应该直接通过
+	disabledAuth, _ := NewAuthorizer().DisableSecurity().Build()
+	err := disabledAuth.PerformSecurityCheck()
+	if err == nil {
+		fmt.Println("   ✅ 通过: 禁用状态跳过检查")
+	} else {
+		fmt.Printf("   ❌ 失败: 禁用状态仍有错误: %v\n", err)
+	}
+
+	// 基础级别应该执行检查
+	basicAuth, _ := NewAuthorizer().WithBasicSecurity().Build()
+	err = basicAuth.PerformSecurityCheck()
+	fmt.Printf("   基础级别检查结果: %v\n", err)
+	if err == nil {
+		fmt.Println("   ✅ 通过: 基础级别正常执行")
+	} else {
+		fmt.Println("   ℹ️  信息: 基础级别检测到安全问题（正常）")
+	}
+
+	fmt.Println("\n🎯 测试总结:")
+	fmt.Println("   - 默认禁用安全检查，开发友好")
+	fmt.Println("   - 可通过多种方式灵活配置安全级别")
+	fmt.Println("   - 安全检查根据级别正确执行")
 }

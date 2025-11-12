@@ -37,6 +37,8 @@ type linuxHardwareInfo struct {
 	MACAddresses      []string `json:"mac_addresses,omitempty"`
 	MemorySize        uint64   `json:"memory_size,omitempty"`
 	PCIDevices        []string `json:"pci_devices,omitempty"`
+	MachineID         string   `json:"machine_id,omitempty"`
+	Hostname          string   `json:"hostname,omitempty"`
 }
 
 var (
@@ -84,6 +86,9 @@ func GetHardwareInfo() (*linuxHardwareInfo, error) {
 
 	// 获取PCI设备信息
 	getPCIInfo(info)
+
+	// 获取平台标识信息
+	getPlatformIdentity(info)
 
 	cachedHardware = info
 	hardwareCacheTime = time.Now()
@@ -223,48 +228,71 @@ func getPCIInfo(info *linuxHardwareInfo) {
 	}
 }
 
+// getPlatformIdentity 收集 machine-id 与主机名等软指纹数据
+func getPlatformIdentity(info *linuxHardwareInfo) {
+	paths := []string{
+		"/etc/machine-id",
+		"/var/lib/dbus/machine-id",
+	}
+	for _, path := range paths {
+		if data, err := readFileString(path); err == nil && data != "" {
+			info.MachineID = data
+			break
+		}
+	}
+
+	if hostname, err := os.Hostname(); err == nil {
+		info.Hostname = hostname
+	}
+}
+
 // GetHardwareFingerprint 生成硬件指纹
 func GetHardwareFingerprint() (string, error) {
-	info, err := GetHardwareInfo()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", err
 	}
+	return status.Value, nil
+}
 
-	// 收集所有可用的硬件标识符并按权重排序
-	weights := collectHardwareWeights(info)
-
-	if len(weights) == 0 {
-		return "", fmt.Errorf("no hardware identifiers available")
+// GetHardwareFingerprintStatus 返回指纹值及稳定性
+func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	info, err := GetHardwareInfo()
+	if err != nil {
+		return nil, err
 	}
 
-	// 按权重排序
+	weights := collectHardwareWeights(info)
+	if len(weights) == 0 {
+		return nil, fmt.Errorf("no hardware identifiers available")
+	}
+
 	sort.Slice(weights, func(i, j int) bool {
 		return weights[i].Weight > weights[j].Weight
 	})
 
-	// 选择权重最高的标识符进行组合
 	var components []string
 	totalWeight := 0
 
 	for _, w := range weights {
-		if w.Value != "" {
-			components = append(components, fmt.Sprintf("%s:%s", w.Name, w.Value))
-			totalWeight += w.Weight
-			// 如果权重足够高，就可以停止添加更多组件
-			if totalWeight >= 200 {
-				break
-			}
+		if w.Value == "" {
+			continue
+		}
+		components = append(components, fmt.Sprintf("%s:%s", w.Name, w.Value))
+		totalWeight += w.Weight
+		if totalWeight >= 200 {
+			break
 		}
 	}
 
 	if len(components) == 0 {
-		return "", fmt.Errorf("no valid hardware identifiers found")
+		return nil, fmt.Errorf("no valid hardware identifiers found")
 	}
 
-	// 生成最终指纹
 	combined := strings.Join(components, "|")
 	hash := sha256.Sum256([]byte(combined))
-	return fmt.Sprintf("%x", hash), nil
+	stable := totalWeight >= 150
+	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: stable}, nil
 }
 
 // collectHardwareWeights 收集硬件权重信息
@@ -313,12 +341,20 @@ func collectHardwareWeights(info *linuxHardwareInfo) []HardwareWeight {
 		weights = append(weights, HardwareWeight{"mac_address", info.MACAddresses[0], 30})
 	}
 
+	// 软指纹（低-中权重）
+	if info.MachineID != "" {
+		weights = append(weights, HardwareWeight{"machine_id", info.MachineID, 60})
+	}
+	if info.Hostname != "" {
+		weights = append(weights, HardwareWeight{"hostname", info.Hostname, 20})
+	}
+
 	return weights
 }
 
 // ProtectedIDWithHardware 基于硬件指纹的保护ID
 func ProtectedIDWithHardware(appID string) (string, error) {
-	fingerprint, err := GetHardwareFingerprint()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", fmt.Errorf("machineid: failed to get hardware fingerprint: %v", err)
 	}
@@ -329,7 +365,7 @@ func ProtectedIDWithHardware(appID string) (string, error) {
 	}
 
 	// 组合机器ID和硬件指纹
-	combined := fmt.Sprintf("%s/%s/%s", appID, id, fingerprint)
+	combined := fmt.Sprintf("%s/%s/%s", appID, id, status.Value)
 	return protect(combined, id), nil
 }
 

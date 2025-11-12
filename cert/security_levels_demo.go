@@ -8,7 +8,7 @@ import (
 
 // DemoSecurityLevels 演示不同安全级别
 func DemoSecurityLevels() {
-	fmt.Println("=== 证书系统安全级别演示 ===\n")
+	fmt.Println("=== 证书系统安全级别演示 ===")
 
 	// 级别 0: 完全禁用（默认）
 	fmt.Println("🔓 级别 0: 完全禁用安全检查（默认）")
@@ -54,7 +54,7 @@ func DemoSecurityLevels() {
 
 // DemoSecurityConfiguration 演示不同配置方式
 func DemoSecurityConfiguration() {
-	fmt.Println("\n=== 安全配置方式演示 ===\n")
+	fmt.Println("\n=== 安全配置方式演示 ===")
 
 	// 方式1: 使用预设配置
 	fmt.Println("📋 方式1: 使用预设配置")
@@ -121,7 +121,7 @@ func printSecurityConfig(auth *Authorizer) {
 
 // DemoSecurityCheck 演示安全检查过程
 func DemoSecurityCheck() {
-	fmt.Println("\n=== 安全检查演示 ===\n")
+	fmt.Println("\n=== 安全检查演示 ===")
 
 	// 测试不同安全级别的检查行为
 	testCases := []struct {
@@ -153,7 +153,7 @@ func DemoSecurityCheck() {
 
 // ShowUsageExamples 显示使用示例
 func ShowUsageExamples() {
-	fmt.Println("\n=== 使用示例 ===\n")
+	fmt.Println("\n=== 使用示例 ===")
 
 	fmt.Println("💻 开发和调试阶段:")
 	fmt.Println(`

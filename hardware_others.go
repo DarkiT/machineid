@@ -45,8 +45,8 @@ func GetHardwareInfo() (*otherHardwareInfo, error) {
 	info := &otherHardwareInfo{}
 
 	// 对于其他平台，只获取基本的网络信息
-	if mac := getMACAddr(); mac != "" {
-		info.MACAddresses = []string{mac}
+	if macInfo, err := getMACAddr(); err == nil && macInfo != nil && macInfo.Address != "" {
+		info.MACAddresses = []string{macInfo.Address}
 	}
 
 	cachedHardware = info
@@ -56,31 +56,32 @@ func GetHardwareInfo() (*otherHardwareInfo, error) {
 
 // GetHardwareFingerprint 其他平台的硬件指纹（简化版）
 func GetHardwareFingerprint() (string, error) {
-	info, err := GetHardwareInfo()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", err
 	}
+	return status.Value, nil
+}
 
-	// 对于其他平台，主要依赖MAC地址
-	var components []string
-
-	if len(info.MACAddresses) > 0 {
-		components = append(components, "mac:"+info.MACAddresses[0])
+// GetHardwareFingerprintStatus 返回简单指纹信息
+func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	info, err := GetHardwareInfo()
+	if err != nil {
+		return nil, err
 	}
 
-	if len(components) == 0 {
-		return "", fmt.Errorf("no hardware identifiers available")
+	if len(info.MACAddresses) == 0 {
+		return nil, fmt.Errorf("no hardware identifiers available")
 	}
 
-	// 生成指纹
-	combined := fmt.Sprintf("other_platform|%s", components[0])
+	combined := fmt.Sprintf("other_platform|mac:%s", info.MACAddresses[0])
 	hash := sha256.Sum256([]byte(combined))
-	return fmt.Sprintf("%x", hash), nil
+	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: true}, nil
 }
 
 // ProtectedIDWithHardware 其他平台版本
 func ProtectedIDWithHardware(appID string) (string, error) {
-	fingerprint, err := GetHardwareFingerprint()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", fmt.Errorf("machineid: failed to get hardware fingerprint: %v", err)
 	}
@@ -91,7 +92,7 @@ func ProtectedIDWithHardware(appID string) (string, error) {
 	}
 
 	// 组合机器ID和硬件指纹
-	combined := fmt.Sprintf("%s/%s/%s", appID, id, fingerprint)
+	combined := fmt.Sprintf("%s/%s/%s", appID, id, status.Value)
 	return protect(combined, id), nil
 }
 

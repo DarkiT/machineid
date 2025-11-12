@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -31,6 +30,8 @@ type SecurityManager struct {
 	mu              sync.RWMutex
 	antiDebugActive bool
 	memProtect      []byte
+	done            chan struct{}  // 用于停止后台检查的信号通道
+	wg              sync.WaitGroup // 用于等待后台goroutine退出
 }
 
 // NewSecurityManager 创建安全管理器
@@ -41,6 +42,7 @@ func NewSecurityManager(level int) *SecurityManager {
 		lastCheckTime:   time.Now(),
 		antiDebugActive: true,
 		memProtect:      make([]byte, 4096),
+		done:            make(chan struct{}),
 	}
 
 	// 初始化内存保护区域
@@ -52,6 +54,7 @@ func NewSecurityManager(level int) *SecurityManager {
 	sm.calculateChecksum()
 
 	// 启动后台安全检查
+	sm.wg.Add(1)
 	go sm.backgroundSecurityCheck()
 
 	return sm
@@ -339,21 +342,21 @@ func (sm *SecurityManager) DetectSandbox() bool {
 
 // ProtectProcess 进程保护
 func (sm *SecurityManager) ProtectProcess() error {
+	// 对关键级别在设置内存保护之前完成数据加密
+	if sm.level >= SecurityLevelCritical {
+		if err := sm.enableDataEncryption(); err != nil {
+			return err
+		}
+	}
+
 	if sm.level >= SecurityLevelAdvanced {
 		// 启用反注入保护
 		if err := sm.enableAntiInjection(); err != nil {
 			return err
 		}
 
-		// 启用内存保护
+		// 启用内存保护（设置为只读）
 		if err := sm.enableMemoryProtection(); err != nil {
-			return err
-		}
-	}
-
-	if sm.level >= SecurityLevelCritical {
-		// 启用关键数据加密
-		if err := sm.enableDataEncryption(); err != nil {
 			return err
 		}
 	}
@@ -403,16 +406,23 @@ func (sm *SecurityManager) enableDataEncryption() error {
 
 // backgroundSecurityCheck 后台安全检查
 func (sm *SecurityManager) backgroundSecurityCheck() {
+	defer sm.wg.Done() // 确保退出时通知WaitGroup
+
 	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if !sm.antiDebugActive {
-			break
+	for {
+		select {
+		case <-ticker.C:
+			if !sm.antiDebugActive {
+				return
+			}
+			// 执行各种安全检查
+			sm.performSecurityChecks()
+		case <-sm.done:
+			// 收到停止信号，立即退出
+			return
 		}
-
-		// 执行各种安全检查
-		sm.performSecurityChecks()
 	}
 }
 
@@ -486,6 +496,9 @@ func (sm *SecurityManager) logSecurityEvent(event string) {
 
 // clearSensitiveData 清理敏感数据
 func (sm *SecurityManager) clearSensitiveData() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	// 清零敏感内存区域
 	for i := range sm.memProtect {
 		sm.memProtect[i] = 0
@@ -498,8 +511,19 @@ func (sm *SecurityManager) clearSensitiveData() {
 // StopSecurityChecks 停止安全检查
 func (sm *SecurityManager) StopSecurityChecks() {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	sm.antiDebugActive = false
+
+	// 关闭done channel以立即停止后台goroutine
+	select {
+	case <-sm.done:
+		// 已经关闭，不再重复关闭
+	default:
+		close(sm.done)
+	}
+	sm.mu.Unlock()
+
+	// 等待后台goroutine完全退出
+	sm.wg.Wait()
 }
 
 // === 特定平台实现 ===
@@ -524,21 +548,28 @@ func checkPEBDebugFlag() bool {
 	// Windows特定：检查PEB结构中的调试标志
 	// 这需要直接内存访问，为安全考虑使用间接方法
 	// 通过检查异常处理行为来推断是否有调试器
+	suspicious := false
 	defer func() {
 		if r := recover(); r != nil {
-			// 在调试器环境下异常处理可能不同
-			// 这里可以进一步分析
+			// 在调试器环境下异常处理可能不同，将其标记为可疑
+			suspicious = true
 		}
 	}()
 
 	// 简单的反调试技术：检查时间差异
 	start := time.Now()
+	dummy := 0
 	for i := 0; i < 10; i++ {
-		// 简单循环
+		// 通过轻量计算避免空循环导致的 lint 告警
+		dummy += i
 	}
+	_ = dummy
 	duration := time.Since(start)
 
 	// 如果执行时间异常长，可能在调试环境中
+	if suspicious {
+		return true
+	}
 	return duration > time.Microsecond*100
 }
 
@@ -652,14 +683,18 @@ func checkMemoryLayout() bool {
 
 	// 检查地址间距是否异常
 	// 正常情况下，连续声明的变量地址应该相对接近
-	diff1 := addr_b - addr_a
-	diff2 := addr_c - addr_b
-
-	if diff1 < 0 {
-		diff1 = -diff1
+	var diff1 uintptr
+	if addr_b >= addr_a {
+		diff1 = addr_b - addr_a
+	} else {
+		diff1 = addr_a - addr_b
 	}
-	if diff2 < 0 {
-		diff2 = -diff2
+
+	var diff2 uintptr
+	if addr_c >= addr_b {
+		diff2 = addr_c - addr_b
+	} else {
+		diff2 = addr_b - addr_c
 	}
 
 	// 如果地址间距异常大，可能在特殊环境中
@@ -974,6 +1009,9 @@ func (sm *SecurityManager) detectCodeInjection() bool {
 
 // 内存保护辅助函数
 func (sm *SecurityManager) encryptCriticalMemory() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	// 加密关键内存区域
 	key := md5.Sum([]byte("cert-security-key"))
 	for i := range sm.memProtect {
@@ -990,25 +1028,14 @@ func (sm *SecurityManager) setMemoryPermissions() error {
 	return nil
 }
 
-func (sm *SecurityManager) mprotectLinux() error {
-	// Linux内存保护
-	ptr := uintptr(unsafe.Pointer(&sm.memProtect[0]))
-	size := uintptr(len(sm.memProtect))
-
-	// 设置为只读
-	_, _, errno := syscall.Syscall(syscall.SYS_MPROTECT, ptr, size, syscall.PROT_READ)
-	if errno != 0 {
-		return errno
-	}
-
-	return nil
-}
-
 func (sm *SecurityManager) encryptSensitiveData(key []byte) error {
 	// 加密敏感数据
 	if len(key) < 32 {
 		return fmt.Errorf("encryption key must be at least 32 bytes")
 	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	// 加密关键内存区域
 	for i := range sm.memProtect {

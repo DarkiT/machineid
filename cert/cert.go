@@ -674,7 +674,7 @@ func generateSKI(pubKey *rsa.PublicKey) []byte {
 }
 
 // createCertificateTemplate 创建证书模板
-func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, privateKey *rsa.PrivateKey) *x509.Certificate {
+func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, _ *rsa.PrivateKey) *x509.Certificate {
 	// 构建主体信息
 	subject := pkix.Name{
 		CommonName:   req.Company.Name,

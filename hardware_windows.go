@@ -72,8 +72,8 @@ func getWindowsHardwareInfo(info *windowsHardwareInfo) {
 	getWindowsSystemInfo(info)
 
 	// 获取网络信息
-	if mac := getMACAddr(); mac != "" {
-		info.MACAddresses = []string{mac}
+	if macInfo, err := getMACAddr(); err == nil && macInfo != nil && macInfo.Address != "" {
+		info.MACAddresses = []string{macInfo.Address}
 	}
 }
 
@@ -175,52 +175,50 @@ func getWindowsDiskSerials() []string {
 
 // GetHardwareFingerprint Windows版本的硬件指纹
 func GetHardwareFingerprint() (string, error) {
-	info, err := GetHardwareInfo()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", err
 	}
+	return status.Value, nil
+}
 
-	// 收集Windows特定的硬件标识符
+// GetHardwareFingerprintStatus 返回指纹与稳定性
+func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	info, err := GetHardwareInfo()
+	if err != nil {
+		return nil, err
+	}
+
 	var components []string
-
-	// Windows的MachineGuid是最重要的标识符
 	if info.ProductUUID != "" {
 		components = append(components, "machine_guid:"+info.ProductUUID)
 	}
-
-	// CPU信息
 	if info.CPUSignature != "" {
 		components = append(components, "cpu:"+info.CPUSignature)
 	}
-
-	// 系统信息
 	if info.SystemVendor != "" && info.ProductName != "" {
 		components = append(components, "system:"+info.SystemVendor+":"+info.ProductName)
 	}
-
-	// BIOS信息
 	if info.BoardSerial != "" {
 		components = append(components, "board:"+info.BoardSerial)
 	}
-
-	// MAC地址作为备选
 	if len(info.MACAddresses) > 0 {
 		components = append(components, "mac:"+info.MACAddresses[0])
 	}
 
 	if len(components) == 0 {
-		return "", fmt.Errorf("no hardware identifiers available")
+		return nil, fmt.Errorf("no hardware identifiers available")
 	}
 
-	// 生成指纹
 	combined := strings.Join(components, "|")
 	hash := sha256.Sum256([]byte(combined))
-	return fmt.Sprintf("%x", hash), nil
+	stable := info.ProductUUID != ""
+	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: stable}, nil
 }
 
 // ProtectedIDWithHardware Windows版本
 func ProtectedIDWithHardware(appID string) (string, error) {
-	fingerprint, err := GetHardwareFingerprint()
+	status, err := GetHardwareFingerprintStatus()
 	if err != nil {
 		return "", fmt.Errorf("machineid: failed to get hardware fingerprint: %v", err)
 	}
@@ -231,7 +229,7 @@ func ProtectedIDWithHardware(appID string) (string, error) {
 	}
 
 	// 组合机器ID和硬件指纹
-	combined := fmt.Sprintf("%s/%s/%s", appID, id, fingerprint)
+	combined := fmt.Sprintf("%s/%s/%s", appID, id, status.Value)
 	return protect(combined, id), nil
 }
 

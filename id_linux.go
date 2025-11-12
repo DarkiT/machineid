@@ -60,9 +60,11 @@ func machineID() (string, error) {
 	if err != nil {
 		id, err = readFile(linuxRandomUuid)
 		if err == nil {
-			writeFirstFile([]string{
+			if writeErr := writeFirstFile([]string{
 				env_pathname, dbusPathEtc, dbusPath, userMachineId,
-			}, id)
+			}, id); writeErr != nil {
+				return "", writeErr
+			}
 		}
 	}
 
@@ -175,9 +177,13 @@ func getContainerIDFromEnv() string {
 // isHexString 检查字符串是否为有效的十六进制字符串
 func isHexString(s string) bool {
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
+		isDigit := c >= '0' && c <= '9'
+		isLowerHex := c >= 'a' && c <= 'f'
+		isUpperHex := c >= 'A' && c <= 'F'
+		if isDigit || isLowerHex || isUpperHex {
+			continue
 		}
+		return false
 	}
 	return true
 }
