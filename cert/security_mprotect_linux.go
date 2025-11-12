@@ -8,8 +8,8 @@ import (
 	"unsafe"
 )
 
-// mprotectLinux 仅在 Linux 环境下设置内存页权限
-func (sm *SecurityManager) mprotectLinux() error {
+// mprotect 在 Linux 环境下设置内存页权限
+func (sm *SecurityManager) mprotect() error {
 	ptr := uintptr(unsafe.Pointer(&sm.memProtect[0]))
 	size := uintptr(len(sm.memProtect))
 

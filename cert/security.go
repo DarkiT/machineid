@@ -1020,12 +1020,8 @@ func (sm *SecurityManager) encryptCriticalMemory() {
 }
 
 func (sm *SecurityManager) setMemoryPermissions() error {
-	// 设置内存页面权限
-	if runtime.GOOS == "linux" {
-		// Linux mprotect调用
-		return sm.mprotectLinux()
-	}
-	return nil
+	// 设置内存页面权限（平台特定实现通过构建标签自动选择）
+	return sm.mprotect()
 }
 
 func (sm *SecurityManager) encryptSensitiveData(key []byte) error {

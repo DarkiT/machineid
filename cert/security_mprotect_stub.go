@@ -1,9 +1,9 @@
-//go:build !linux
-// +build !linux
+//go:build !linux && !windows
+// +build !linux,!windows
 
 package cert
 
-// mprotectLinux 在非 Linux 环境下为空操作，避免平台不支持的系统调用
-func (sm *SecurityManager) mprotectLinux() error {
+// mprotect 在不支持的平台上为空操作
+func (sm *SecurityManager) mprotect() error {
 	return nil
 }
