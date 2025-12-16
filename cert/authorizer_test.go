@@ -15,8 +15,8 @@ func TestNewAuthorizer(t *testing.T) {
 	}
 
 	// 验证默认配置
-	if builder.config.Version == "" {
-		t.Error("默认版本不应为空")
+	if builder.config.RuntimeVersion != "" {
+		t.Error("默认运行版本应为空")
 	}
 
 	if len(builder.config.CACert) == 0 {
@@ -32,13 +32,13 @@ func TestNewAuthorizer(t *testing.T) {
 	}
 }
 
-// TestAuthorizerBuilder_WithVersion 测试设置版本号
-func TestAuthorizerBuilder_WithVersion(t *testing.T) {
+// TestAuthorizerBuilder_WithRuntimeVersion 测试设置运行版本
+func TestAuthorizerBuilder_WithRuntimeVersion(t *testing.T) {
 	t.Parallel()
 
-	builder := NewAuthorizer().WithVersion("2.0.0")
-	if builder.config.Version != "2.0.0" {
-		t.Errorf("版本设置失败: 期望 2.0.0, 实际 %s", builder.config.Version)
+	builder := NewAuthorizer().WithRuntimeVersion("2.0.0")
+	if builder.config.RuntimeVersion != "2.0.0" {
+		t.Errorf("运行版本设置失败: 期望 2.0.0, 实际 %s", builder.config.RuntimeVersion)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestAuthorizerBuilder_WithSecurityLevel(t *testing.T) {
 			t.Parallel()
 
 			builder := NewAuthorizer().WithSecurityLevel(tt.level)
-			level, ok := builder.config.Security.GetSecurityLevel()
+			level, ok := builder.config.Security.EffectiveSecurityLevel()
 
 			if !ok {
 				t.Error("安全级别未设置")
@@ -196,7 +196,7 @@ func TestAuthorizerBuilder_ChainedCalls(t *testing.T) {
 	cacheSize := 5000
 
 	builder := NewAuthorizer().
-		WithVersion(version).
+		WithRuntimeVersion(version).
 		WithEnterpriseID(enterpriseID).
 		WithMaxClockSkew(skew).
 		WithCacheTTL(ttl).
@@ -204,8 +204,8 @@ func TestAuthorizerBuilder_ChainedCalls(t *testing.T) {
 		WithSecurityLevel(2)
 
 	// 验证所有配置
-	if builder.config.Version != version {
-		t.Errorf("版本不匹配: 期望 %s, 实际 %s", version, builder.config.Version)
+	if builder.config.RuntimeVersion != version {
+		t.Errorf("运行版本不匹配: 期望 %s, 实际 %s", version, builder.config.RuntimeVersion)
 	}
 
 	if builder.config.EnterpriseID != enterpriseID {
@@ -224,7 +224,7 @@ func TestAuthorizerBuilder_ChainedCalls(t *testing.T) {
 		t.Errorf("缓存大小不匹配: 期望 %d, 实际 %d", cacheSize, builder.config.Cache.MaxSize)
 	}
 
-	level, ok := builder.config.Security.GetSecurityLevel()
+	level, ok := builder.config.Security.EffectiveSecurityLevel()
 	if !ok {
 		t.Error("安全级别未设置")
 	}
@@ -240,14 +240,14 @@ func TestSecurityConfig_GetSetSecurityLevel(t *testing.T) {
 	config := SecurityConfig{}
 
 	// 初始状态：未设置
-	_, ok := config.GetSecurityLevel()
+	_, ok := config.EffectiveSecurityLevel()
 	if ok {
 		t.Error("初始状态应该没有安全级别")
 	}
 
 	// 设置安全级别
 	config.SetSecurityLevel(3)
-	level, ok := config.GetSecurityLevel()
+	level, ok := config.EffectiveSecurityLevel()
 	if !ok {
 		t.Error("安全级别应该已设置")
 	}
@@ -310,7 +310,7 @@ func TestAuthorizerConcurrentBuild(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			_, err := newTestAuthorizerBuilder(t).
-				WithVersion("1.0.0").
+				WithRuntimeVersion("1.0.0").
 				Build()
 			done <- err
 		}()
@@ -353,10 +353,10 @@ func TestAuthorizerConfig(t *testing.T) {
 	t.Parallel()
 
 	config := AuthorizerConfig{
-		Version:      "1.0.0",
-		CACert:       []byte("cert"),
-		CAKey:        []byte("key"),
-		EnterpriseID: 123,
+		RuntimeVersion: "1.0.0",
+		CACert:         []byte("cert"),
+		CAKey:          []byte("key"),
+		EnterpriseID:   123,
 		Security: SecurityConfig{
 			EnableAntiDebug:      true,
 			EnableTimeValidation: true,
@@ -370,8 +370,8 @@ func TestAuthorizerConfig(t *testing.T) {
 	}
 
 	// 验证配置字段
-	if config.Version != "1.0.0" {
-		t.Error("版本字段错误")
+	if config.RuntimeVersion != "1.0.0" {
+		t.Error("运行版本字段错误")
 	}
 
 	if string(config.CACert) != "cert" {

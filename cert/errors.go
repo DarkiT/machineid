@@ -39,6 +39,8 @@ const (
 	ErrTimeManipulation   ErrorCode = "TIME_MANIPULATION"
 	ErrUnauthorizedAccess ErrorCode = "UNAUTHORIZED_ACCESS"
 	ErrCertificateRevoked ErrorCode = "CERTIFICATE_REVOKED"
+	ErrTimeRollback       ErrorCode = "TIME_ROLLBACK"    // 时间回滚
+	ErrHardwareChanged    ErrorCode = "HARDWARE_CHANGED" // 硬件变更
 
 	// 配置错误代码
 	ErrInvalidCAConfig ErrorCode = "INVALID_CA_CONFIG"
@@ -50,6 +52,11 @@ const (
 	ErrSystemClockSkew    ErrorCode = "SYSTEM_CLOCK_SKEW"
 	ErrInsufficientRights ErrorCode = "INSUFFICIENT_RIGHTS"
 	ErrFileSystemError    ErrorCode = "FILESYSTEM_ERROR"
+
+	// 容器和快照错误代码
+	ErrContainerBindingFailed ErrorCode = "CONTAINER_BINDING_FAILED" // 容器绑定失败
+	ErrSnapshotExpired        ErrorCode = "SNAPSHOT_EXPIRED"         // 快照过期
+	ErrSnapshotInvalid        ErrorCode = "SNAPSHOT_INVALID"         // 快照无效
 )
 
 // CertError 证书错误
@@ -82,23 +89,23 @@ func (e *CertError) Error() string {
 	return result
 }
 
-// GetType 获取错误类型
-func (e *CertError) GetType() ErrorType {
+// ErrorType 返回错误类型
+func (e *CertError) ErrorType() ErrorType {
 	return e.Type
 }
 
-// GetCode 获取错误代码
-func (e *CertError) GetCode() ErrorCode {
+// ErrorCode 返回错误代码
+func (e *CertError) ErrorCode() ErrorCode {
 	return e.Code
 }
 
-// GetDetails 获取错误详情
-func (e *CertError) GetDetails() map[string]interface{} {
+// ErrorDetails 返回错误详情
+func (e *CertError) ErrorDetails() map[string]interface{} {
 	return e.Details
 }
 
-// GetSuggestions 获取解决建议
-func (e *CertError) GetSuggestions() []string {
+// ErrorSuggestions 返回解决建议
+func (e *CertError) ErrorSuggestions() []string {
 	return e.Suggestions
 }
 
@@ -254,6 +261,30 @@ func (e *CertError) addSecuritySuggestions() {
 			"联系管理员确认证书状态",
 			"检查是否有新的证书可用",
 			"确认程序版本是否需要更新")
+	case ErrTimeRollback:
+		e.Suggestions = append(e.Suggestions,
+			"检测到系统时间回滚，请同步到正确时间",
+			"如果时间正确，清除历史时间戳后重试",
+			"确保系统时间服务正常运行")
+	case ErrHardwareChanged:
+		e.Suggestions = append(e.Suggestions,
+			"硬件配置发生变化，请重新生成证书",
+			"联系管理员更新硬件绑定信息",
+			"检查硬件快照是否需要更新")
+	case ErrContainerBindingFailed:
+		e.Suggestions = append(e.Suggestions,
+			"容器环境绑定失败，检查硬件访问权限",
+			"确认容器配置允许访问宿主机硬件信息",
+			"考虑使用容器级绑定模式")
+	case ErrSnapshotExpired:
+		e.Suggestions = append(e.Suggestions,
+			"硬件快照已过期，请创建新快照",
+			"联系管理员延长快照有效期")
+	case ErrSnapshotInvalid:
+		e.Suggestions = append(e.Suggestions,
+			"硬件快照签名验证失败",
+			"检查快照文件是否被篡改",
+			"确认使用正确的应用标识符")
 	}
 }
 

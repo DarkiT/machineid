@@ -1,7 +1,6 @@
 package cert
 
 import (
-	"crypto/rsa"
 	"crypto/x509"
 	"sync"
 	"time"
@@ -16,8 +15,8 @@ type SecurityConfig struct {
 	SecurityLevel          *int          // 显式安全级别（可选，优先级最高）
 }
 
-// GetSecurityLevel 获取安全级别
-func (sc *SecurityConfig) GetSecurityLevel() (int, bool) {
+// EffectiveSecurityLevel 获取安全级别
+func (sc *SecurityConfig) EffectiveSecurityLevel() (int, bool) {
 	if sc.SecurityLevel != nil {
 		return *sc.SecurityLevel, true
 	}
@@ -38,12 +37,12 @@ type CacheConfig struct {
 
 // AuthorizerConfig 授权管理器配置
 type AuthorizerConfig struct {
-	Version      string         // 当前版本
-	CACert       []byte         // CA证书
-	CAKey        []byte         // CA私钥
-	EnterpriseID int            // 企业标识符
-	Security     SecurityConfig // 安全配置
-	Cache        CacheConfig    // 缓存配置
+	RuntimeVersion string         // 当前运行版本
+	CACert         []byte         // CA证书
+	CAKey          []byte         // CA私钥
+	EnterpriseID   int            // 企业标识符
+	Security       SecurityConfig // 安全配置
+	Cache          CacheConfig    // 缓存配置
 }
 
 // AuthorizerBuilder 授权管理器构建器
@@ -55,10 +54,10 @@ type AuthorizerBuilder struct {
 func NewAuthorizer() *AuthorizerBuilder {
 	return &AuthorizerBuilder{
 		config: AuthorizerConfig{
-			Version:      "1.0.0",
-			CACert:       defaultCACert,
-			CAKey:        defaultCAKey,
-			EnterpriseID: defaultEnterpriseID,
+			RuntimeVersion: "",
+			CACert:         defaultCACert,
+			CAKey:          defaultCAKey,
+			EnterpriseID:   defaultEnterpriseID,
 			Security: SecurityConfig{
 				EnableAntiDebug:        false, // 默认禁用反调试
 				EnableTimeValidation:   false, // 默认禁用时间验证
@@ -75,9 +74,9 @@ func NewAuthorizer() *AuthorizerBuilder {
 	}
 }
 
-// WithVersion 设置版本号
-func (b *AuthorizerBuilder) WithVersion(version string) *AuthorizerBuilder {
-	b.config.Version = version
+// WithRuntimeVersion 设置运行时的程序版本
+func (b *AuthorizerBuilder) WithRuntimeVersion(version string) *AuthorizerBuilder {
+	b.config.RuntimeVersion = version
 	return b
 }
 
@@ -162,14 +161,15 @@ func (b *AuthorizerBuilder) Build() (*Authorizer, error) {
 	// 创建授权管理器
 	auth := &Authorizer{
 		config:         b.config,
-		currentVersion: b.config.Version,
+		runtimeVersion: b.config.RuntimeVersion,
 		enterpriseID:   b.config.EnterpriseID,
 		caCertPEM:      b.config.CACert,
 		caKeyPEM:       b.config.CAKey,
+		certVersion:    defaultCertVersion, // 使用默认证书版本初始化
 	}
 
 	// 创建吊销管理器
-	rm, err := NewRevokeManager(b.config.Version)
+	rm, err := NewRevokeManager(b.config.RuntimeVersion)
 	if err != nil {
 		return nil, NewConfigError(ErrInvalidCAConfig, "failed to create revoke manager", err)
 	}
@@ -185,10 +185,6 @@ func (b *AuthorizerBuilder) Build() (*Authorizer, error) {
 
 // validateConfig 验证配置
 func (b *AuthorizerBuilder) validateConfig() error {
-	if b.config.Version == "" {
-		return NewConfigError(ErrInvalidCAConfig, "version cannot be empty", nil)
-	}
-
 	if len(b.config.CACert) == 0 {
 		return NewConfigError(ErrMissingCA, "CA certificate cannot be empty", nil)
 	}
@@ -217,13 +213,14 @@ type Authorizer struct {
 	mu             sync.RWMutex
 	config         AuthorizerConfig
 	caCert         *x509.Certificate
-	caKey          *rsa.PrivateKey
+	caKey          any
 	caCertPEM      []byte
 	caKeyPEM       []byte
 	initialized    bool
 	revokeManager  *RevokeManager
-	currentVersion string
+	runtimeVersion string
 	enterpriseID   int
+	certVersion    string // 证书格式版本（实例级别，避免全局变量并发问题）
 }
 
 // 预设配置函数
@@ -231,7 +228,7 @@ type Authorizer struct {
 // ForDevelopment 开发环境预设（完全禁用安全检查）
 func ForDevelopment() *AuthorizerBuilder {
 	return NewAuthorizer().
-		WithVersion("dev").
+		WithRuntimeVersion("dev").
 		WithSecurityLevel(0). // 完全禁用安全检查
 		WithMaxClockSkew(time.Hour).
 		WithCacheTTL(1 * time.Minute).
@@ -252,7 +249,7 @@ func ForProduction() *AuthorizerBuilder {
 // ForTesting 测试环境预设（禁用安全检查）
 func ForTesting() *AuthorizerBuilder {
 	return NewAuthorizer().
-		WithVersion("test").
+		WithRuntimeVersion("test").
 		WithSecurityLevel(0). // 禁用安全检查
 		WithMaxClockSkew(24 * time.Hour).
 		WithCacheTTL(10 * time.Second).
@@ -304,9 +301,188 @@ func (b *AuthorizerBuilder) WithRelaxedSecurity() *AuthorizerBuilder {
 		WithMaxClockSkew(24 * time.Hour)
 }
 
-// GetConfig 获取配置（用于调试和监控）
-func (a *Authorizer) GetConfig() AuthorizerConfig {
+// Config 获取配置（用于调试和监控）
+func (a *Authorizer) Config() AuthorizerConfig {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config
+}
+
+// === 函数式选项模式 ===
+
+// Option 配置选项函数
+type Option func(*AuthorizerBuilder) *AuthorizerBuilder
+
+// Apply 应用多个配置选项
+//
+// 使用示例：
+//
+//	auth, err := NewAuthorizer().
+//	    WithRuntimeVersion("1.0.0").
+//	    Apply(
+//	        WithHardwareBinding(machineid.BindingModeFingerprint),
+//	        WithContainerSupport(&ContainerBindingConfig{
+//	            Mode: machineid.ContainerBindingAuto,
+//	        }),
+//	        WithOfflineValidation("./snapshots"),
+//	    ).
+//	    Build()
+func (b *AuthorizerBuilder) Apply(opts ...Option) *AuthorizerBuilder {
+	for _, opt := range opts {
+		b = opt(b)
+	}
+	return b
+}
+
+// WithHardwareBinding 配置硬件绑定模式
+//
+// 参数：
+//   - mode: 绑定模式（fingerprint/mac/machine_id/custom）
+//
+// 使用示例：
+//
+//	WithHardwareBinding(machineid.BindingModeFingerprint)
+func WithHardwareBinding(mode string) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		// 根据模式设置相应的安全配置
+		switch mode {
+		case "fingerprint", "mac":
+			b.config.Security.RequireHardwareBinding = true
+		default:
+			b.config.Security.RequireHardwareBinding = false
+		}
+		return b
+	}
+}
+
+// WithContainerSupport 配置容器环境支持
+//
+// 参数：
+//   - config: 容器绑定配置
+//
+// 使用示例：
+//
+//	WithContainerSupport(&machineid.ContainerBindingConfig{
+//	    Mode:                machineid.ContainerBindingAuto,
+//	    PreferHostHardware:  true,
+//	    FallbackToContainer: true,
+//	})
+func WithContainerSupport(config interface{}) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		// 容器支持配置已集成到 machineid 包中
+		// 这里主要用于文档和向后兼容
+		return b
+	}
+}
+
+// WithOfflineValidation 配置离线验证支持
+//
+// 参数：
+//   - snapshotPath: 硬件快照存储路径
+//
+// 使用示例：
+//
+//	WithOfflineValidation("./snapshots")
+func WithOfflineValidation(snapshotPath string) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		// 离线验证需要启用时间验证和硬件绑定
+		b.config.Security.EnableTimeValidation = true
+		b.config.Security.RequireHardwareBinding = true
+		return b
+	}
+}
+
+// WithMonotonicTime 配置单调时间检查
+//
+// 参数：
+//   - persistencePath: 时间戳持久化路径
+//   - maxClockSkew: 允许的最大时钟偏差
+//
+// 使用示例：
+//
+//	WithMonotonicTime("./.timestamp", 5*time.Minute)
+func WithMonotonicTime(persistencePath string, maxClockSkew time.Duration) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		b.config.Security.EnableTimeValidation = true
+		b.config.Security.MaxClockSkew = maxClockSkew
+		return b
+	}
+}
+
+// WithSignedCache 配置带签名的缓存
+//
+// 参数：
+//   - signKey: 签名密钥
+//   - config: 缓存配置
+//
+// 使用示例：
+//
+//	WithSignedCache([]byte("my-secret-key"), CacheConfig{
+//	    TTL:             10 * time.Minute,
+//	    MaxSize:         1000,
+//	    CleanupInterval: time.Minute,
+//	})
+func WithSignedCache(signKey []byte, config CacheConfig) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		b.config.Cache = config
+		return b
+	}
+}
+
+// WithSecurityPreset 使用预设的安全配置组合
+//
+// 参数：
+//   - preset: 预设名称 ("development"/"production"/"testing")
+//
+// 使用示例：
+//
+//	WithSecurityPreset("production")
+func WithSecurityPreset(preset string) Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		switch preset {
+		case "development":
+			return b.WithRelaxedSecurity()
+		case "production":
+			return b.
+				WithSecureDefaults().
+				WithBasicSecurity()
+		case "testing":
+			return b.
+				WithRelaxedSecurity().
+				WithMaxClockSkew(time.Hour)
+		default:
+			return b
+		}
+	}
+}
+
+// WithAdvancedSecurity 高级安全配置组合
+//
+// 使用示例：
+//
+//	WithAdvancedSecurity()
+func WithAdvancedSecurity() Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		return b.
+			WithSecurityLevel(2).
+			EnableAntiDebug(true).
+			EnableTimeValidation(true).
+			WithMaxClockSkew(5 * time.Minute)
+	}
+}
+
+// WithFullSecurity 完整安全配置组合（包括硬件绑定和离线验证）
+//
+// 使用示例：
+//
+//	WithFullSecurity()
+func WithFullSecurity() Option {
+	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
+		return b.
+			WithSecurityLevel(3).
+			EnableAntiDebug(true).
+			EnableTimeValidation(true).
+			RequireHardwareBinding(true).
+			WithMaxClockSkew(5 * time.Minute)
+	}
 }

@@ -5,6 +5,7 @@ package machineid
 
 import (
 	"os"
+	"strings"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -22,7 +23,19 @@ func machineID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s, nil
+	trimmed := strings.TrimSpace(s)
+	if isContainerEnvironment() {
+		if cid := getContainerID(); cid != "" {
+			if normalized := normalizeContainerIDCandidate(cid); normalized != "" {
+				return normalized, nil
+			}
+			return trim(cid), nil
+		}
+		if scoped := deriveContainerScopedID(trimmed); scoped != "" {
+			return scoped, nil
+		}
+	}
+	return trimmed, nil
 }
 
 // isContainerEnvironment Windows下的容器检测
@@ -50,8 +63,10 @@ func getContainerID() string {
 	}
 
 	for _, envVar := range envVars {
-		if value := os.Getenv(envVar); value != "" && len(value) >= 12 {
-			return value
+		if value := os.Getenv(envVar); value != "" {
+			if normalized := normalizeContainerIDCandidate(value); normalized != "" {
+				return strings.ToUpper(normalized)
+			}
 		}
 	}
 	return ""

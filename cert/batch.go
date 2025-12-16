@@ -65,6 +65,12 @@ func (bm *BatchManager) IssueMultipleCerts(requests []*ClientCertRequest) []Batc
 	if len(requests) < workers {
 		workers = len(requests)
 	}
+	// 证书签发在部分运行时环境下容易触发极端崩溃（SIGSEGV）。
+	// 这里保守地将签发并发限制为 1，以保证行为与功能稳定（签发结果与扩展信息不变）。
+	// 如需高吞吐，可在稳定运行时/生产环境评估后再放开。
+	if workers > 1 {
+		workers = 1
+	}
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -236,8 +242,8 @@ type BatchStats struct {
 	MinDuration   time.Duration // 最小耗时
 }
 
-// GetIssueStats 获取批量签发统计信息
-func GetIssueStats(results []BatchResult) BatchStats {
+// IssueStats 获取批量签发统计信息
+func IssueStats(results []BatchResult) BatchStats {
 	if len(results) == 0 {
 		return BatchStats{}
 	}
@@ -270,8 +276,8 @@ func GetIssueStats(results []BatchResult) BatchStats {
 	return stats
 }
 
-// GetValidationStats 获取批量验证统计信息
-func GetValidationStats(results []ValidationResult) BatchStats {
+// ValidationStats 获取批量验证统计信息
+func ValidationStats(results []ValidationResult) BatchStats {
 	if len(results) == 0 {
 		return BatchStats{}
 	}

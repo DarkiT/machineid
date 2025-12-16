@@ -13,7 +13,7 @@ func main() {
 
 	// 使用新的优雅API创建授权管理器
 	auth, err := cert.NewAuthorizer().
-		WithVersion("1.0.0").
+		WithRuntimeVersion("1.0.0").
 		EnableAntiDebug(false). // 开发环境关闭反调试
 		EnableTimeValidation(true).
 		WithCacheSize(1000).
@@ -25,13 +25,12 @@ func main() {
 
 	// 生成CA证书
 	caInfo := cert.CAInfo{
-		CommonName:   "ZStudio Software CA",
+		CommonName:   "ZStudio Software",
 		Organization: "子说工作室",
 		Country:      "CN",
 		Province:     "Guangdong",
 		Locality:     "Guangzhou",
 		ValidDays:    36500, // 100年有效期
-		KeySize:      4096,
 	}
 
 	err = auth.GenerateCA(caInfo)
@@ -47,21 +46,24 @@ func main() {
 	}
 	fmt.Println("✓ CA证书生成并保存成功")
 
-	// 获取受保护的机器ID
-	machineID, err := machineid.ProtectedID("zstudio.cert.auth")
+	// 获取受保护的机器ID及绑定信息
+	bindingResult, err := machineid.ProtectedIDResult("zstudio.cert.auth")
 	if err != nil {
 		fmt.Printf("获取机器ID失败: %v\n", err)
 		return
 	}
+	machineID := bindingResult.Hash
 	fmt.Printf("机器ID: %s\n", machineID)
+	fmt.Printf("绑定模式: %s (提供者: %s)\n", bindingResult.Mode, bindingResult.Provider)
 
 	// 使用新的客户端证书构建器
 	request, err := cert.NewClientRequest().
 		WithMachineID(machineID).
+		WithBindingResult(bindingResult).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
 		WithCompany("XX广州分公司", "技术部").
 		WithContact("张三", "13800138000", "zhang.san@example.com").
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithValidityDays(365).
 		Build()
 	if err != nil {
@@ -125,7 +127,9 @@ func main() {
 		fmt.Printf("省份: %s\n", clientInfo.Province)
 		fmt.Printf("城市: %s\n", clientInfo.City)
 		fmt.Printf("详细地址: %s\n", clientInfo.Address)
-		fmt.Printf("程序版本: %s\n", clientInfo.Version)
+		fmt.Printf("最低客户端版本: %s\n", clientInfo.MinClientVersion)
+		fmt.Printf("绑定模式: %s\n", clientInfo.BindingMode)
+		fmt.Printf("绑定提供者: %s\n", clientInfo.BindingProvider)
 		fmt.Printf("证书有效期: %d天\n", clientInfo.ValidityPeriodDays)
 		fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02 15:04:05"))
 	}
@@ -166,7 +170,7 @@ func main() {
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
 		WithCompany("另一台机器公司", "测试部门").
 		WithContact("另一个用户", "13900139000", "another@example.com").
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithValidityDays(365).
 		Build()
 	if err != nil {
@@ -221,7 +225,7 @@ func main() {
 		time.Sleep(15 * time.Second)
 
 		// 获取监控统计
-		stats := watcher.GetStats()
+		stats := watcher.Stats()
 		fmt.Printf("\n📊 监控统计:\n")
 		fmt.Printf("   检查次数: %v\n", stats["check_count"])
 		fmt.Printf("   最后检查: %v\n", stats["last_check"])

@@ -13,7 +13,7 @@ func DemoSecurityLevels() {
 	// 级别 0: 完全禁用（默认）
 	fmt.Println("🔓 级别 0: 完全禁用安全检查（默认）")
 	defaultAuth, _ := NewAuthorizer().Build()
-	level := defaultAuth.getSecurityLevel()
+	level := defaultAuth.GetSecurityLevel()
 	fmt.Printf("   - 安全级别: %d\n", level)
 	fmt.Printf("   - 描述: 无任何安全检查，适合开发和测试\n")
 	fmt.Printf("   - 性能影响: 无\n\n")
@@ -21,7 +21,7 @@ func DemoSecurityLevels() {
 	// 级别 1: 基础防护
 	fmt.Println("🛡️  级别 1: 基础安全防护")
 	basicAuth, _ := NewAuthorizer().WithBasicSecurity().Build()
-	level = basicAuth.getSecurityLevel()
+	level = basicAuth.GetSecurityLevel()
 	fmt.Printf("   - 安全级别: %d\n", level)
 	fmt.Printf("   - 描述: 仅基础调试器检测\n")
 	fmt.Printf("   - 检测项: 简单调试器（IsDebuggerPresent、TracerPid等）\n")
@@ -30,7 +30,7 @@ func DemoSecurityLevels() {
 	// 级别 2: 高级防护
 	fmt.Println("🛡️  级别 2: 高级安全防护")
 	advancedAuth, _ := NewAuthorizer().WithSecureDefaults().Build()
-	level = advancedAuth.getSecurityLevel()
+	level = advancedAuth.GetSecurityLevel()
 	fmt.Printf("   - 安全级别: %d\n", level)
 	fmt.Printf("   - 描述: 完整反逆向保护\n")
 	fmt.Printf("   - 检测项: 高级调试器、虚拟机、沙箱、时间攻击\n")
@@ -39,7 +39,7 @@ func DemoSecurityLevels() {
 	// 级别 3: 关键防护
 	fmt.Println("🔒 级别 3: 关键安全防护")
 	criticalAuth, _ := NewAuthorizer().WithCriticalSecurity().Build()
-	level = criticalAuth.getSecurityLevel()
+	level = criticalAuth.GetSecurityLevel()
 	fmt.Printf("   - 安全级别: %d\n", level)
 	fmt.Printf("   - 描述: 最高级别保护\n")
 	fmt.Printf("   - 检测项: 所有检测 + 进程保护 + 内存加密\n")
@@ -92,8 +92,8 @@ func DemoSecurityConfiguration() {
 
 // printSecurityConfig 打印安全配置信息
 func printSecurityConfig(auth *Authorizer) {
-	level := auth.getSecurityLevel()
-	config := auth.GetConfig()
+	level := auth.GetSecurityLevel()
+	config := auth.Config()
 
 	fmt.Printf("      安全级别: %d", level)
 	switch level {
@@ -108,7 +108,7 @@ func printSecurityConfig(auth *Authorizer) {
 	}
 	fmt.Println()
 
-	if explicitLevel, ok := config.Security.GetSecurityLevel(); ok {
+	if explicitLevel, ok := config.Security.EffectiveSecurityLevel(); ok {
 		fmt.Printf("      显式级别: %d\n", explicitLevel)
 	} else {
 		fmt.Printf("      推断级别: 基于配置自动推断\n")
@@ -187,8 +187,8 @@ auth := cert.NewAuthorizer().
 
 	fmt.Println("\n📊 检查安全配置:")
 	fmt.Println(`
-level := auth.getSecurityLevel()             // 获取当前安全级别
-config := auth.GetConfig()                   // 获取完整配置
+level := auth.GetSecurityLevel()             // 获取当前安全级别
+config := auth.Config()                   // 获取完整配置
 err := auth.PerformSecurityCheck()           // 手动执行安全检查`)
 }
 

@@ -5,12 +5,13 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
 	"time"
+
+	machineid "github.com/darkit/machineid"
 )
 
 // 这个文件展示了新的优雅API设计的使用示例
@@ -19,7 +20,7 @@ import (
 func Example1_BasicUsage() {
 	// 使用Builder模式创建授权管理器
 	auth, err := NewAuthorizer().
-		WithVersion("1.0.0").
+		WithRuntimeVersion("1.0.0").
 		EnableAntiDebug(true).
 		EnableTimeValidation(true).
 		WithCacheSize(1000).
@@ -29,14 +30,22 @@ func Example1_BasicUsage() {
 		return
 	}
 
+	// 生产环境推荐使用 ProtectedIDResult 以获取绑定信息
+	bindingResult, err := machineid.ProtectedIDResult("example.app")
+	if err != nil {
+		fmt.Printf("生成机器码失败: %v\n", err)
+		return
+	}
+
 	// 创建客户端证书请求
 	request, err := NewClientRequest().
-		WithMachineID("machine-12345").
+		WithMachineID(bindingResult.Hash).
+		WithBindingResult(bindingResult).
 		WithExpiry(time.Now().AddDate(1, 0, 0)). // 1年有效期
 		WithCompany("示例科技有限公司", "研发部").
 		WithAddress("中国", "广东省", "深圳市", "南山区科技园").
 		WithContact("张三", "13800138000", "zhang.san@example.com").
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithValidityDays(365).
 		Build()
 	if err != nil {
@@ -92,8 +101,8 @@ func Example2_WithCache() {
 	fmt.Printf("第二次验证: %v, 耗时: %v\n", err2, duration2)
 
 	// 获取缓存统计
-	stats := cachedAuth.GetCacheStats()
-	fmt.Printf("缓存命中率: %.2f%%\n", cachedAuth.GetCacheHitRate()*100)
+	stats := cachedAuth.CacheStats()
+	fmt.Printf("缓存命中率: %.2f%%\n", cachedAuth.CacheHitRate()*100)
 	fmt.Printf("缓存大小: %d/%d\n", stats.Size, stats.MaxSize)
 }
 
@@ -112,7 +121,7 @@ func Example3_BatchOperations() {
 			WithMachineID(fmt.Sprintf("batch-machine-%d", i+1)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
 			WithCompany("批量测试公司", "技术部").
-			WithVersion("1.0.0").
+			WithMinClientVersion("1.0.0").
 			WithValidityDays(365).
 			Build()
 		if err != nil {
@@ -129,7 +138,7 @@ func Example3_BatchOperations() {
 		Execute()
 
 	// 统计结果
-	stats := GetIssueStats(results)
+	stats := IssueStats(results)
 	fmt.Printf("批量签发完成:\n")
 	fmt.Printf("总数: %d, 成功: %d, 失败: %d\n", stats.Total, stats.Success, stats.Failed)
 	fmt.Printf("平均耗时: %v, 最大耗时: %v\n", stats.AvgDuration, stats.MaxDuration)
@@ -149,7 +158,7 @@ func Example3_BatchOperations() {
 		AddValidations(validations...).
 		Execute()
 
-	validationStats := GetValidationStats(validationResults)
+	validationStats := ValidationStats(validationResults)
 	fmt.Printf("批量验证完成:\n")
 	fmt.Printf("总数: %d, 成功: %d, 失败: %d\n",
 		validationStats.Total, validationStats.Success, validationStats.Failed)
@@ -179,8 +188,8 @@ func Example4_ConfigurationFile() {
 		return
 	}
 
-	config := built.GetConfig()
-	fmt.Printf("配置加载成功，版本: %s, 企业ID: %d\n", config.Version, config.EnterpriseID)
+	config := built.Config()
+	fmt.Printf("配置加载成功，运行版本: %s, 企业ID: %d\n", config.RuntimeVersion, config.EnterpriseID)
 }
 
 // Example5_PresetConfigurations 预设配置示例
@@ -191,7 +200,7 @@ func Example5_PresetConfigurations() {
 		fmt.Printf("创建开发环境授权管理器失败: %v\n", err)
 		return
 	}
-	devConfig := devAuth.GetConfig()
+	devConfig := devAuth.Config()
 	fmt.Printf("开发环境配置 - 反调试: %t, 时间验证: %t\n",
 		devConfig.Security.EnableAntiDebug, devConfig.Security.EnableTimeValidation)
 
@@ -201,7 +210,7 @@ func Example5_PresetConfigurations() {
 		fmt.Printf("创建生产环境授权管理器失败: %v\n", err)
 		return
 	}
-	prodConfig := prodAuth.GetConfig()
+	prodConfig := prodAuth.Config()
 	fmt.Printf("生产环境配置 - 反调试: %t, 硬件绑定: %t\n",
 		prodConfig.Security.EnableAntiDebug, prodConfig.Security.RequireHardwareBinding)
 
@@ -211,7 +220,7 @@ func Example5_PresetConfigurations() {
 		fmt.Printf("创建测试环境授权管理器失败: %v\n", err)
 		return
 	}
-	testConfig := testAuth.GetConfig()
+	testConfig := testAuth.Config()
 	fmt.Printf("测试环境配置 - 时钟偏差: %v, 缓存大小: %d\n",
 		testConfig.Security.MaxClockSkew, testConfig.Cache.MaxSize)
 }
@@ -279,7 +288,7 @@ func Example7_PerformanceMonitoring() {
 	}
 
 	// 获取统计信息
-	stats := monitor.GetStats()
+	stats := monitor.Stats()
 	for operation, stat := range stats {
 		fmt.Printf("操作: %s\n", operation)
 		fmt.Printf("  次数: %d\n", stat.Count)
@@ -312,15 +321,16 @@ func Example8_ErrorHandling() {
 
 			// 获取详细错误信息
 			if certErr, ok := err.(*CertError); ok {
-				fmt.Printf("错误类型: %s\n", certErr.GetCode())
+				fmt.Printf("错误类别: %d\n", certErr.ErrorType())
+				fmt.Printf("错误代码: %s\n", certErr.ErrorCode())
 				fmt.Printf("错误消息: %s\n", certErr.Error())
 				fmt.Printf("解决建议:\n")
-				for _, suggestion := range certErr.GetSuggestions() {
+				for _, suggestion := range certErr.ErrorSuggestions() {
 					fmt.Printf("  - %s\n", suggestion)
 				}
 
 				// 获取错误详情
-				if details := certErr.GetDetails(); len(details) > 0 {
+				if details := certErr.ErrorDetails(); len(details) > 0 {
 					fmt.Printf("错误详情:\n")
 					for key, value := range details {
 						fmt.Printf("  %s: %v\n", key, value)
@@ -334,7 +344,7 @@ func Example8_ErrorHandling() {
 // Example9_SystemInfoCollection 系统信息收集示例
 func Example9_SystemInfoCollection() {
 	collector := NewSystemInfoCollector()
-	sysInfo := collector.GetSystemInfo()
+	sysInfo := collector.SystemInfo()
 
 	fmt.Printf("系统信息:\n")
 	fmt.Printf("操作系统: %v\n", sysInfo["os"])
@@ -384,7 +394,6 @@ func Example10_ExtractClientInfo() {
 		Province:     "广东省",
 		Locality:     "深圳市",
 		ValidDays:    365,
-		KeySize:      2048,
 	}
 
 	err = auth.GenerateCA(caInfo)
@@ -399,7 +408,7 @@ func Example10_ExtractClientInfo() {
 		WithExpiry(time.Now().AddDate(2, 0, 0)).
 		WithCompany("示例科技有限公司", "研发中心").
 		WithContact("李经理", "13912345678", "li.manager@example.com").
-		WithVersion("2.1.0").
+		WithMinClientVersion("2.1.0").
 		WithValidityDays(730).
 		Build()
 	if err != nil {
@@ -426,6 +435,8 @@ func Example10_ExtractClientInfo() {
 	// 显示提取的客户信息
 	fmt.Println("\n=== 证书中的客户信息 ===")
 	fmt.Printf("机器ID: %s\n", clientInfo.MachineID)
+	fmt.Printf("绑定模式: %s\n", clientInfo.BindingMode)
+	fmt.Printf("绑定提供者: %s\n", clientInfo.BindingProvider)
 	fmt.Printf("公司名称: %s\n", clientInfo.CompanyName)
 	fmt.Printf("部门: %s\n", clientInfo.Department)
 	fmt.Printf("联系人: %s\n", clientInfo.ContactPerson)
@@ -434,7 +445,7 @@ func Example10_ExtractClientInfo() {
 	fmt.Printf("国家: %s\n", clientInfo.Country)
 	fmt.Printf("省份: %s\n", clientInfo.Province)
 	fmt.Printf("城市: %s\n", clientInfo.City)
-	fmt.Printf("程序版本: %s\n", clientInfo.Version)
+	fmt.Printf("最低客户端版本: %s\n", clientInfo.MinClientVersion)
 	fmt.Printf("证书有效期: %d天\n", clientInfo.ValidityPeriodDays)
 	fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02 15:04:05"))
 
@@ -464,7 +475,6 @@ func Example11_CertificateWatching() {
 		Province:     "广东省",
 		Locality:     "深圳市",
 		ValidDays:    365,
-		KeySize:      2048,
 	}
 
 	err = auth.GenerateCA(caInfo)
@@ -481,7 +491,7 @@ func Example11_CertificateWatching() {
 		WithExpiry(expiringTime).
 		WithCompany("监控测试公司", "技术部").
 		WithContact("监控员", "13900139000", "monitor@example.com").
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithValidityDays(1). // 1天有效期
 		Build()
 	if err != nil {
@@ -558,7 +568,7 @@ func Example11_CertificateWatching() {
 	time.Sleep(30 * time.Second)
 
 	// 显示监控统计
-	stats := watcher.GetStats()
+	stats := watcher.Stats()
 	fmt.Printf("\n📊 监控统计信息:\n")
 	fmt.Printf("   检查次数: %v\n", stats["check_count"])
 	fmt.Printf("   最后检查时间: %v\n", stats["last_check"])
@@ -588,7 +598,7 @@ func Example11_CertificateWatching() {
 	fmt.Println("✅ 已添加2个监控器到管理器")
 
 	// 获取所有统计信息
-	allStats := manager.GetAllStats()
+	allStats := manager.AllStats()
 	fmt.Printf("📊 管理器统计:\n")
 	for id, stat := range allStats {
 		fmt.Printf("   %s: 运行状态=%v, 检查次数=%v\n",
@@ -615,43 +625,15 @@ func DemonstrateKeySizeDetection() {
 
 	inspector := NewCertificateInspector()
 
-	// 1. 演示 RSA 密钥识别
-	fmt.Println("1. RSA 密钥识别:")
-	demonstrateRSAKeys(inspector)
-
-	// 2. 演示 ECDSA 密钥识别
+	// 1. 演示 ECDSA 密钥识别
 	fmt.Println()
-	fmt.Println("2. ECDSA 密钥识别:")
+	fmt.Println("1. ECDSA 密钥识别:")
 	demonstrateECDSAKeys(inspector)
 
-	// 3. 演示 Ed25519 密钥识别
+	// 2. 演示 Ed25519 密钥识别
 	fmt.Println()
-	fmt.Println("3. Ed25519 密钥识别:")
+	fmt.Println("2. Ed25519 密钥识别:")
 	demonstrateEd25519Keys(inspector)
-}
-
-// demonstrateRSAKeys 演示 RSA 密钥识别
-func demonstrateRSAKeys(inspector *CertificateInspector) {
-	rsaSizes := []int{2048, 3072, 4096}
-
-	for _, size := range rsaSizes {
-		// 生成 RSA 密钥
-		privateKey, err := rsa.GenerateKey(rand.Reader, size)
-		if err != nil {
-			fmt.Printf("   ✗ 生成 RSA-%d 密钥失败: %v\n", size, err)
-			continue
-		}
-
-		// 创建自签名证书
-		cert := createDemoCertificate(&privateKey.PublicKey)
-
-		// 检查证书信息
-		info := inspector.InspectCertificate(cert)
-
-		fmt.Printf("   ✓ RSA-%d: 检测到密钥大小 = %d bits\n", size, info.KeySize)
-		fmt.Printf("     - 主题: %s\n", info.Subject)
-		fmt.Printf("     - 签名算法: %s\n", info.SignatureAlgorithm)
-	}
 }
 
 // demonstrateECDSAKeys 演示 ECDSA 密钥识别
@@ -748,10 +730,10 @@ func createDemoCertificate(publicKey any) *x509.Certificate {
 
 	var privateKey any
 	switch pub := publicKey.(type) {
-	case *rsa.PublicKey:
-		privateKey, _ = rsa.GenerateKey(rand.Reader, pub.N.BitLen())
 	case *ecdsa.PublicKey:
 		privateKey, _ = ecdsa.GenerateKey(pub.Curve, rand.Reader)
+	case ed25519.PublicKey:
+		publicKey, privateKey, _ = ed25519.GenerateKey(rand.Reader)
 	}
 
 	certDER, _ := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
@@ -767,7 +749,7 @@ func TestSecurityLevels() {
 	// 测试默认配置（应该是禁用）
 	fmt.Println("测试1: 默认配置")
 	defaultAuth, _ := NewAuthorizer().Build()
-	level := defaultAuth.getSecurityLevel()
+	level := defaultAuth.GetSecurityLevel()
 	fmt.Printf("   默认安全级别: %d (期望: 0)\n", level)
 	if level == 0 {
 		fmt.Println("   ✅ 通过: 默认禁用安全检查")
@@ -778,7 +760,7 @@ func TestSecurityLevels() {
 	// 测试显式设置
 	fmt.Println("\n测试2: 显式设置安全级别")
 	explicitAuth, _ := NewAuthorizer().WithSecurityLevel(2).Build()
-	level = explicitAuth.getSecurityLevel()
+	level = explicitAuth.GetSecurityLevel()
 	fmt.Printf("   显式设置级别: %d (期望: 2)\n", level)
 	if level == 2 {
 		fmt.Println("   ✅ 通过: 显式设置生效")
@@ -791,8 +773,8 @@ func TestSecurityLevels() {
 	devAuth, _ := ForDevelopment().Build()
 	prodAuth, _ := ForProduction().Build()
 
-	devLevel := devAuth.getSecurityLevel()
-	prodLevel := prodAuth.getSecurityLevel()
+	devLevel := devAuth.GetSecurityLevel()
+	prodLevel := prodAuth.GetSecurityLevel()
 
 	fmt.Printf("   开发环境级别: %d (期望: 0)\n", devLevel)
 	fmt.Printf("   生产环境级别: %d (期望: 1)\n", prodLevel)

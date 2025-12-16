@@ -11,13 +11,13 @@ import (
 
 // ConfigFile 配置文件结构
 type ConfigFile struct {
-	Version      string                 `json:"version" yaml:"version"`
-	EnterpriseID int                    `json:"enterprise_id" yaml:"enterprise_id"`
-	CA           CAConfiguration        `json:"ca" yaml:"ca"`
-	Security     SecurityConfiguration  `json:"security" yaml:"security"`
-	Cache        CacheConfiguration     `json:"cache" yaml:"cache"`
-	Templates    map[string]interface{} `json:"templates" yaml:"templates"`
-	Logging      LoggingConfiguration   `json:"logging" yaml:"logging"`
+	RuntimeVersion string                 `json:"runtime_version" yaml:"runtime_version"`
+	EnterpriseID   int                    `json:"enterprise_id" yaml:"enterprise_id"`
+	CA             CAConfiguration        `json:"ca" yaml:"ca"`
+	Security       SecurityConfiguration  `json:"security" yaml:"security"`
+	Cache          CacheConfiguration     `json:"cache" yaml:"cache"`
+	Templates      map[string]interface{} `json:"templates" yaml:"templates"`
+	Logging        LoggingConfiguration   `json:"logging" yaml:"logging"`
 }
 
 // CAConfiguration CA配置
@@ -156,9 +156,9 @@ func (cl *ConfigLoader) loadFromFile(filePath string) (*ConfigFile, error) {
 
 // validateConfig 验证配置文件
 func (cl *ConfigLoader) validateConfig(config *ConfigFile) error {
-	if config.Version == "" {
+	if config.RuntimeVersion == "" {
 		return NewConfigError(ErrInvalidCAConfig,
-			"version is required in config file", nil)
+			"runtime version is required in config file", nil)
 	}
 
 	if config.EnterpriseID <= 0 {
@@ -194,8 +194,8 @@ func (cl *ConfigLoader) validateCAConfig(ca *CAConfiguration) error {
 // ToAuthorizerConfig 转换为授权管理器配置
 func (cf *ConfigFile) ToAuthorizerConfig() (AuthorizerConfig, error) {
 	config := AuthorizerConfig{
-		Version:      cf.Version,
-		EnterpriseID: cf.EnterpriseID,
+		RuntimeVersion: cf.RuntimeVersion,
+		EnterpriseID:   cf.EnterpriseID,
 	}
 
 	// 处理CA配置
@@ -338,8 +338,8 @@ func (cf *ConfigFile) processCacheConfig(config *AuthorizerConfig) error {
 // GenerateDefaultConfig 生成默认配置文件
 func GenerateDefaultConfig(filePath string) error {
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: defaultEnterpriseID,
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   defaultEnterpriseID,
 		CA: CAConfiguration{
 			UseDefault:   true,
 			AutoGenerate: false,
@@ -475,8 +475,8 @@ func parseSimpleYAML(data []byte, config *ConfigFile) error {
 		value = strings.Trim(value, "\"'") // 去除引号
 
 		switch key {
-		case "version":
-			config.Version = value
+		case "runtime_version":
+			config.RuntimeVersion = value
 		case "enterprise_id":
 			if val := parseIntValue(value); val != 0 {
 				config.EnterpriseID = val
@@ -485,8 +485,8 @@ func parseSimpleYAML(data []byte, config *ConfigFile) error {
 	}
 
 	// 设置默认值
-	if config.Version == "" {
-		config.Version = "1.0.0"
+	if config.RuntimeVersion == "" {
+		config.RuntimeVersion = "1.0.0"
 	}
 	if config.EnterpriseID == 0 {
 		config.EnterpriseID = defaultEnterpriseID
@@ -499,7 +499,7 @@ func parseSimpleYAML(data []byte, config *ConfigFile) error {
 func marshalSimpleYAML(config *ConfigFile) ([]byte, error) {
 	var result strings.Builder
 	result.WriteString("# Certificate Configuration\n")
-	result.WriteString("version: \"" + config.Version + "\"\n")
+	result.WriteString("runtime_version: \"" + config.RuntimeVersion + "\"\n")
 	result.WriteString("enterprise_id: " + fmt.Sprintf("%d", config.EnterpriseID) + "\n")
 	result.WriteString("ca:\n")
 	result.WriteString("  use_default: " + fmt.Sprintf("%t", config.CA.UseDefault) + "\n")

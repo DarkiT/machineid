@@ -39,6 +39,11 @@ type linuxHardwareInfo struct {
 	PCIDevices        []string `json:"pci_devices,omitempty"`
 	MachineID         string   `json:"machine_id,omitempty"`
 	Hostname          string   `json:"hostname,omitempty"`
+
+	// Linux 硬件增强信息（新增字段；保持对现有字段的向后兼容）
+	UEFIVariables []string `json:"uefi_variables,omitempty"`
+	TPMVersion    string   `json:"tpm_version,omitempty"`
+	ACPITables    []string `json:"acpi_tables,omitempty"`
 }
 
 var (
@@ -90,9 +95,134 @@ func GetHardwareInfo() (*linuxHardwareInfo, error) {
 	// 获取平台标识信息
 	getPlatformIdentity(info)
 
+	// 获取UEFI变量信息（如果系统支持UEFI并暴露sysfs）
+	getUEFIVariables(info)
+
+	// 获取TPM信息（如果存在TPM设备节点）
+	getTPMInfo(info)
+
+	// 获取ACPI/SMBIOS表信息（用于补充主机级固件特征）
+	getACPIInfo(info)
+
 	cachedHardware = info
 	hardwareCacheTime = time.Now()
 	return info, nil
+}
+
+// getUEFIVariables 读取 UEFI 变量名列表。
+//
+// 用途说明（中文）：
+//   - UEFI 变量来自固件层（比软件特征更稳定），通常在物理机上可用。
+//   - 在容器/非 UEFI 启动/权限受限场景下可能不存在，此时应优雅降级为空。
+//
+// 实现策略：
+//   - 同时兼容 /sys/firmware/efi/vars/ 与 /sys/firmware/efi/efivars/ 两种路径。
+//   - 只收集“变量名”，不读取变量内容，避免权限/隐私与不必要的 IO 成本。
+func getUEFIVariables(info *linuxHardwareInfo) {
+	baseCandidates := []string{
+		"/sys/firmware/efi/vars",
+		"/sys/firmware/efi/efivars",
+	}
+
+	var vars []string
+	for _, base := range baseCandidates {
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			name := strings.TrimSpace(entry.Name())
+			if name == "" {
+				continue
+			}
+			// 过滤掉明显的临时/噪声项；其余保留
+			vars = append(vars, name)
+		}
+	}
+
+	if len(vars) == 0 {
+		return
+	}
+
+	sort.Strings(vars)
+	info.UEFIVariables = uniqStrings(vars)
+}
+
+// getTPMInfo 读取 TPM 设备信息。
+//
+// 用途说明（中文）：
+//   - TPM 是硬件安全模块，作为绑定特征通常比软件信息更稳定。
+//   - 这里不做复杂的用户态访问，只从 sysfs 读取描述与 PCR 摘要，避免依赖 tpm2-tools。
+//
+// 实现策略：
+//   - description：/sys/class/tpm/tpm0/device/description（可能不存在）
+//   - pcrs：优先尝试 /sys/class/tpm/tpm0/pcrs（或同目录下可能存在的 pcrs_*），不存在则跳过
+//   - 读取失败一律忽略，不影响整体硬件信息采集。
+func getTPMInfo(info *linuxHardwareInfo) {
+	tpmBase := "/sys/class/tpm/tpm0"
+
+	descPath := filepath.Join(tpmBase, "device", "description")
+	if desc, err := readFileString(descPath); err == nil && desc != "" {
+		info.TPMVersion = normalizeOneLine(desc)
+	}
+
+	// 读取 PCR 信息：不同内核/驱动可能路径不同，这里做一个温和的探测
+	pcrCandidates := []string{
+		filepath.Join(tpmBase, "pcrs"),
+		filepath.Join(tpmBase, "pcrs_sha1"),
+		filepath.Join(tpmBase, "pcrs_sha256"),
+	}
+	for _, p := range pcrCandidates {
+		if pcrs, err := readFileString(p); err == nil && pcrs != "" {
+			// PCR 作为“是否支持 TPM 的佐证”，不直接暴露到结构体字段，避免巨大字符串影响输出。
+			// 但为了后续权重与指纹可用性，我们用一个轻量摘要拼入 TPMVersion。
+			sum := sha256.Sum256([]byte(pcrs))
+			if info.TPMVersion == "" {
+				info.TPMVersion = "tpm"
+			}
+			info.TPMVersion = info.TPMVersion + "|pcrs:" + fmt.Sprintf("%x", sum[:8])
+			break
+		}
+	}
+}
+
+// getACPIInfo 读取 ACPI 表信息（包含 SMBIOS 相关表）。
+//
+// 用途说明（中文）：
+//   - 固件/平台表属于更靠近硬件的特征，理论上比主机名、machine-id 更稳定。
+//   - 在容器、裁剪内核或权限受限环境下可能缺失，必须优雅降级。
+//
+// 实现策略：
+//   - 列出 /sys/firmware/acpi/tables/ 下的表名作为特征；并优先关注 SMBIOS 相关表（如 SMBIOS/DMI）。
+//   - 不读取表内容，避免权限与体积问题。
+func getACPIInfo(info *linuxHardwareInfo) {
+	acpiTablesPath := "/sys/firmware/acpi/tables"
+	entries, err := os.ReadDir(acpiTablesPath)
+	if err != nil {
+		return
+	}
+
+	var tables []string
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		// 跳过元数据文件
+		if strings.HasSuffix(name, ".aml") || strings.HasSuffix(name, ".dat") {
+			// 某些发行版可能会放置额外文件；保守跳过显然不需要的扩展
+			continue
+		}
+		tables = append(tables, name)
+	}
+
+	if len(tables) == 0 {
+		return
+	}
+
+	sort.Strings(tables)
+	info.ACPITables = uniqStrings(tables)
 }
 
 // getDMIInfo 获取DMI/SMBIOS信息
@@ -299,7 +429,23 @@ func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
 func collectHardwareWeights(info *linuxHardwareInfo) []HardwareWeight {
 	var weights []HardwareWeight
 
-	// DMI信息（最高权重）
+	// UEFI / TPM（固件/安全模块，优先于软件特征）
+	// 注意：这里的权重代表“稳定/不可伪造程度”，应高于 machine-id/hostname 等软件特征。
+	if len(info.UEFIVariables) > 0 {
+		// 为了避免变量名列表过长，指纹权重侧只取一个摘要值
+		sum := sha256.Sum256([]byte(strings.Join(info.UEFIVariables, ",")))
+		weights = append(weights, HardwareWeight{"uefi_vars", fmt.Sprintf("%x", sum[:16]), 100})
+	}
+	if info.TPMVersion != "" {
+		weights = append(weights, HardwareWeight{"tpm", info.TPMVersion, 95})
+	}
+	if len(info.ACPITables) > 0 {
+		// ACPI 表名可作为固件侧的补充特征，权重略低于 TPM
+		sum := sha256.Sum256([]byte(strings.Join(info.ACPITables, ",")))
+		weights = append(weights, HardwareWeight{"acpi_tables", fmt.Sprintf("%x", sum[:16]), 92})
+	}
+
+	// DMI信息（高权重）
 	if info.ProductUUID != "" && info.ProductUUID != "00000000-0000-0000-0000-000000000000" {
 		weights = append(weights, HardwareWeight{"product_uuid", info.ProductUUID, 100})
 	}
@@ -377,6 +523,34 @@ func readFileString(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func normalizeOneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// 将多行内容压缩到一行，避免输出中出现换行造成不稳定
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	return s
+}
+
+func uniqStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	var last string
+	for i, v := range in {
+		if i == 0 || v != last {
+			out = append(out, v)
+			last = v
+		}
+	}
+	return out
 }
 
 func getPartitionUUID(device string) string {

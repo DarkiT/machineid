@@ -4,7 +4,6 @@ import (
 	"crypto/dsa" // nolint:staticcheck // 需要支持识别旧的 DSA 证书
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -169,9 +168,6 @@ func (ci *CertificateInspector) getKeySize(cert *x509.Certificate) int {
 	}
 
 	switch pub := cert.PublicKey.(type) {
-	case *rsa.PublicKey:
-		// RSA 密钥大小（位数）
-		return pub.N.BitLen()
 	case *ecdsa.PublicKey:
 		// ECDSA 密钥大小（曲线参数的位数）
 		return pub.Curve.Params().BitSize
@@ -196,7 +192,7 @@ func NewSystemInfoCollector() *SystemInfoCollector {
 }
 
 // GetSystemInfo 获取系统信息
-func (sic *SystemInfoCollector) GetSystemInfo() map[string]any {
+func (sic *SystemInfoCollector) SystemInfo() map[string]any {
 	info := make(map[string]any)
 
 	info["os"] = runtime.GOOS
@@ -461,8 +457,8 @@ func (pm *PerformanceMonitor) RecordOperation(name string, duration time.Duratio
 	stats.AvgTime = stats.TotalTime / time.Duration(stats.Count)
 }
 
-// GetStats 获取统计信息
-func (pm *PerformanceMonitor) GetStats() map[string]*OperationStats {
+// Stats 获取统计信息
+func (pm *PerformanceMonitor) Stats() map[string]*OperationStats {
 	result := make(map[string]*OperationStats)
 	for name, stats := range pm.operations {
 		// 复制统计数据

@@ -13,6 +13,7 @@ type ValidationCache struct {
 	entries map[string]*CacheEntry
 	config  CacheConfig
 	stats   CacheStats
+	done    chan struct{} // 用于关闭清理协程
 }
 
 // CacheEntry 缓存条目
@@ -41,6 +42,7 @@ func NewValidationCache(config CacheConfig) *ValidationCache {
 		stats: CacheStats{
 			MaxSize: config.MaxSize,
 		},
+		done: make(chan struct{}),
 	}
 
 	// 启动清理协程
@@ -53,10 +55,12 @@ func NewValidationCache(config CacheConfig) *ValidationCache {
 
 // Get 从缓存获取验证结果
 func (vc *ValidationCache) Get(certPEM []byte, machineID string) (error, bool) {
-	vc.mu.RLock()
-	defer vc.mu.RUnlock()
-
 	key := vc.generateKey(certPEM, machineID)
+	now := time.Now()
+
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+
 	entry, exists := vc.entries[key]
 
 	if !exists {
@@ -65,17 +69,17 @@ func (vc *ValidationCache) Get(certPEM []byte, machineID string) (error, bool) {
 	}
 
 	// 检查是否过期
-	if time.Now().After(entry.ExpiresAt) {
+	if now.After(entry.ExpiresAt) {
 		vc.stats.Misses++
-		// 异步清理过期条目
-		go vc.removeEntry(key)
+		delete(vc.entries, key)
+		vc.stats.Size = len(vc.entries)
 		return nil, false
 	}
 
 	// 更新统计信息
 	vc.stats.Hits++
 	entry.HitCount++
-	entry.LastHit = time.Now()
+	entry.LastHit = now
 
 	return entry.Result, true
 }
@@ -136,21 +140,28 @@ func (vc *ValidationCache) evictLRU() {
 	}
 }
 
-// removeEntry 异步移除条目
-func (vc *ValidationCache) removeEntry(key string) {
-	vc.mu.Lock()
-	defer vc.mu.Unlock()
-	delete(vc.entries, key)
-	vc.stats.Size = len(vc.entries)
-}
-
 // cleanupLoop 清理过期条目的循环
 func (vc *ValidationCache) cleanupLoop() {
 	ticker := time.NewTicker(vc.config.CleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		vc.cleanup()
+	for {
+		select {
+		case <-vc.done:
+			return
+		case <-ticker.C:
+			vc.cleanup()
+		}
+	}
+}
+
+// Close 关闭缓存并停止清理协程
+func (vc *ValidationCache) Close() {
+	select {
+	case <-vc.done:
+		// 已经关闭
+	default:
+		close(vc.done)
 	}
 }
 
@@ -178,8 +189,8 @@ func (vc *ValidationCache) cleanup() {
 	vc.stats.Size = len(vc.entries)
 }
 
-// GetStats 获取缓存统计信息
-func (vc *ValidationCache) GetStats() CacheStats {
+// Stats 获取缓存统计信息
+func (vc *ValidationCache) Stats() CacheStats {
 	vc.mu.RLock()
 	defer vc.mu.RUnlock()
 
@@ -204,8 +215,8 @@ func (vc *ValidationCache) Size() int {
 	return len(vc.entries)
 }
 
-// GetHitRate 获取缓存命中率
-func (vc *ValidationCache) GetHitRate() float64 {
+// HitRate 获取缓存命中率
+func (vc *ValidationCache) HitRate() float64 {
 	vc.mu.RLock()
 	defer vc.mu.RUnlock()
 
@@ -247,9 +258,9 @@ func (ca *CachedAuthorizer) ValidateCert(certPEM []byte, machineID string) error
 	return result
 }
 
-// GetCacheStats 获取缓存统计
-func (ca *CachedAuthorizer) GetCacheStats() CacheStats {
-	return ca.cache.GetStats()
+// CacheStats 获取缓存统计
+func (ca *CachedAuthorizer) CacheStats() CacheStats {
+	return ca.cache.Stats()
 }
 
 // ClearCache 清空验证缓存
@@ -257,9 +268,9 @@ func (ca *CachedAuthorizer) ClearCache() {
 	ca.cache.Clear()
 }
 
-// GetCacheHitRate 获取缓存命中率
-func (ca *CachedAuthorizer) GetCacheHitRate() float64 {
-	return ca.cache.GetHitRate()
+// CacheHitRate 获取缓存命中率
+func (ca *CachedAuthorizer) CacheHitRate() float64 {
+	return ca.cache.HitRate()
 }
 
 // 添加缓存配置构建器方法
@@ -275,4 +286,201 @@ func (b *AuthorizerBuilder) BuildWithCache() (*CachedAuthorizer, error) {
 		return nil, err
 	}
 	return auth.WithCache(), nil
+}
+
+// === 签名缓存功能 ===
+
+// SignedCacheEntry 带签名的缓存条目
+//
+// 用于离线验证场景，确保缓存数据的完整性和真实性
+type SignedCacheEntry struct {
+	*CacheEntry
+	Signature  string    // HMAC-SHA256 签名
+	MachineID  string    // 机器ID（用于验证）
+	SignedAt   time.Time // 签名时间
+	DataHash   string    // 数据哈希（用于检测篡改）
+	SnapshotID string    // 关联的硬件快照ID（可选）
+}
+
+// SignedValidationCache 带签名的验证缓存
+type SignedValidationCache struct {
+	*ValidationCache
+	signKey []byte // 签名密钥
+}
+
+// NewSignedValidationCache 创建带签名的验证缓存
+func NewSignedValidationCache(config CacheConfig, signKey []byte) *SignedValidationCache {
+	return &SignedValidationCache{
+		ValidationCache: NewValidationCache(config),
+		signKey:         signKey,
+	}
+}
+
+// StoreWithSignature 带签名存储缓存条目
+//
+// 参数：
+//   - certPEM: 证书PEM数据
+//   - machineID: 机器ID
+//   - result: 验证结果
+//   - snapshotID: 关联的硬件快照ID（可选）
+//
+// 返回签名后的缓存条目
+func (svc *SignedValidationCache) StoreWithSignature(
+	certPEM []byte,
+	machineID string,
+	result error,
+	snapshotID string,
+) (*SignedCacheEntry, error) {
+	// 创建基础缓存条目
+	entry := &CacheEntry{
+		Result:    result,
+		ExpiresAt: time.Now().Add(svc.config.TTL),
+		HitCount:  0,
+		CreatedAt: time.Now(),
+		LastHit:   time.Now(),
+	}
+
+	// 计算数据哈希
+	dataHash := svc.generateKey(certPEM, machineID)
+
+	// 计算签名
+	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+		dataHash,
+		machineID,
+		entry.CreatedAt.Format(time.RFC3339),
+		entry.ExpiresAt.Format(time.RFC3339),
+	)
+
+	h := sha256.New()
+	h.Write(svc.signKey)
+	h.Write([]byte(signatureData))
+	signature := fmt.Sprintf("%x", h.Sum(nil))
+
+	// 创建签名缓存条目
+	signedEntry := &SignedCacheEntry{
+		CacheEntry: entry,
+		Signature:  signature,
+		MachineID:  machineID,
+		SignedAt:   time.Now(),
+		DataHash:   dataHash,
+		SnapshotID: snapshotID,
+	}
+
+	// 存储到缓存
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+
+	key := svc.generateKey(certPEM, machineID)
+
+	// 检查缓存容量
+	if len(svc.entries) >= svc.config.MaxSize {
+		svc.evictLRU()
+	}
+
+	svc.entries[key] = entry
+	svc.stats.Size = len(svc.entries)
+
+	return signedEntry, nil
+}
+
+// GetWithVerification 验证后获取缓存条目
+//
+// 参数：
+//   - certPEM: 证书PEM数据
+//   - machineID: 机器ID
+//   - signedEntry: 之前存储的签名条目
+//
+// 返回验证结果和是否有效
+func (svc *SignedValidationCache) GetWithVerification(
+	certPEM []byte,
+	machineID string,
+	signedEntry *SignedCacheEntry,
+) (error, bool) {
+	if signedEntry == nil {
+		return nil, false
+	}
+
+	// 验证机器ID
+	if signedEntry.MachineID != machineID {
+		return fmt.Errorf("machine ID mismatch"), false
+	}
+
+	// 验证是否过期
+	if time.Now().After(signedEntry.ExpiresAt) {
+		return fmt.Errorf("cache entry expired"), false
+	}
+
+	// 计算数据哈希
+	dataHash := svc.generateKey(certPEM, machineID)
+
+	// 验证数据完整性
+	if signedEntry.DataHash != dataHash {
+		return fmt.Errorf("data hash mismatch: cache tampered"), false
+	}
+
+	// 重新计算签名并验证
+	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+		signedEntry.DataHash,
+		signedEntry.MachineID,
+		signedEntry.CreatedAt.Format(time.RFC3339),
+		signedEntry.ExpiresAt.Format(time.RFC3339),
+	)
+
+	h := sha256.New()
+	h.Write(svc.signKey)
+	h.Write([]byte(signatureData))
+	expectedSignature := fmt.Sprintf("%x", h.Sum(nil))
+
+	if signedEntry.Signature != expectedSignature {
+		return fmt.Errorf("signature verification failed"), false
+	}
+
+	// 签名验证通过，更新统计信息
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+
+	svc.stats.Hits++
+	signedEntry.HitCount++
+	signedEntry.LastHit = time.Now()
+
+	return signedEntry.Result, true
+}
+
+// ExportSignedEntry 导出签名缓存条目（用于持久化）
+func (svc *SignedValidationCache) ExportSignedEntry(
+	certPEM []byte,
+	machineID string,
+) (*SignedCacheEntry, error) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+
+	key := svc.generateKey(certPEM, machineID)
+	entry, exists := svc.entries[key]
+
+	if !exists {
+		return nil, fmt.Errorf("entry not found in cache")
+	}
+
+	// 构建签名条目
+	dataHash := svc.generateKey(certPEM, machineID)
+
+	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+		dataHash,
+		machineID,
+		entry.CreatedAt.Format(time.RFC3339),
+		entry.ExpiresAt.Format(time.RFC3339),
+	)
+
+	h := sha256.New()
+	h.Write(svc.signKey)
+	h.Write([]byte(signatureData))
+	signature := fmt.Sprintf("%x", h.Sum(nil))
+
+	return &SignedCacheEntry{
+		CacheEntry: entry,
+		Signature:  signature,
+		MachineID:  machineID,
+		SignedAt:   time.Now(),
+		DataHash:   dataHash,
+	}, nil
 }

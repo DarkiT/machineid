@@ -147,8 +147,8 @@ func (w *CertWatcher) IsRunning() bool {
 	return w.isRunning
 }
 
-// GetStats 获取监控统计信息
-func (w *CertWatcher) GetStats() map[string]interface{} {
+// Stats 获取监控统计信息
+func (w *CertWatcher) Stats() map[string]interface{} {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -323,8 +323,8 @@ func (wm *WatcherManager) RemoveWatcher(id string) {
 	}
 }
 
-// GetWatcher 获取监控器
-func (wm *WatcherManager) GetWatcher(id string) (*CertWatcher, bool) {
+// Watcher 获取监控器
+func (wm *WatcherManager) Watcher(id string) (*CertWatcher, bool) {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
@@ -343,14 +343,14 @@ func (wm *WatcherManager) StopAll() {
 	wm.watchers = make(map[string]*CertWatcher)
 }
 
-// GetAllStats 获取所有监控器的统计信息
-func (wm *WatcherManager) GetAllStats() map[string]map[string]interface{} {
+// AllStats 获取所有监控器的统计信息
+func (wm *WatcherManager) AllStats() map[string]map[string]interface{} {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
 	stats := make(map[string]map[string]interface{})
 	for id, watcher := range wm.watchers {
-		stats[id] = watcher.GetStats()
+		stats[id] = watcher.Stats()
 	}
 
 	return stats

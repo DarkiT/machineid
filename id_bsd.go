@@ -6,6 +6,7 @@ package machineid
 import (
 	"bytes"
 	"os"
+	"strings"
 )
 
 const hostidPath = "/etc/hostid"
@@ -22,7 +23,19 @@ func machineID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return id, nil
+	trimmed := trim(id)
+	if isContainerEnvironment() {
+		if cid := getContainerID(); cid != "" {
+			if normalized := normalizeContainerIDCandidate(cid); normalized != "" {
+				return normalized, nil
+			}
+			return trim(cid), nil
+		}
+		if scoped := deriveContainerScopedID(trimmed); scoped != "" {
+			return scoped, nil
+		}
+	}
+	return trimmed, nil
 }
 
 func readHostid() (string, error) {
@@ -71,8 +84,10 @@ func getContainerID() string {
 	}
 
 	for _, envVar := range envVars {
-		if value := os.Getenv(envVar); value != "" && len(value) >= 12 {
-			return value
+		if value := os.Getenv(envVar); value != "" {
+			if normalized := normalizeContainerIDCandidate(value); normalized != "" {
+				return strings.ToUpper(normalized)
+			}
 		}
 	}
 	return ""

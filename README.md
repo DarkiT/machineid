@@ -113,6 +113,22 @@ if err != nil {
 fmt.Printf("主网卡MAC: %s\n", macAddr)
 ```
 
+### 自定义绑定提供者
+
+如果需要扩展绑定来源（例如磁盘序列号、云厂商元数据），可以注册自定义提供者：
+
+```go
+machineid.RegisterBindingProvider("disk", func(appID, machineID string) (string, bool, error) {
+    serial, err := readDiskSerial()
+    if err != nil || serial == "" {
+        return "", false, err
+    }
+    return serial, true, nil
+})
+```
+
+当内置硬件指纹和 MAC 绑定不可用时，`ProtectedID` 会尝试自定义提供者，并在 `BindingResult` 中返回 `Mode="custom"`、`Provider="disk"` 等信息。
+
 ### 容器环境检测
 
 ```go
@@ -177,21 +193,25 @@ import (
 
 func main() {
     // 创建授权管理器（默认开发友好，无安全检查）
-    auth, err := cert.NewAuthorizer().Build()
+    auth, err := cert.NewAuthorizer().
+        WithRuntimeVersion("2.5.0"). // 设置当前运行的软件版本
+        Build()
     if err != nil {
         panic(err)
     }
 
-    // 获取机器码（使用标准ProtectedID）
-    machineID, _ := machineid.ProtectedID("your.app.id")
+    // 获取机器码（使用标准ProtectedIDResult 以保留绑定来源）
+    bindingResult, _ := machineid.ProtectedIDResult("your.app.id")
+    machineID := bindingResult.Hash
 
     // 构建证书请求
     request, err := cert.NewClientRequest().
         WithMachineID(machineID).
+        WithBindingResult(bindingResult).
         WithExpiry(time.Now().AddDate(1, 0, 0)).
         WithCompany("示例科技公司", "研发部").
         WithContact("张经理", "13800138000", "zhang@example.com").
-        WithVersion("2.0.0").
+        WithMinClientVersion("2.0.0").
         WithValidityDays(365).
         Build()
 
@@ -212,6 +232,8 @@ func main() {
     if err == nil {
         fmt.Printf("授权给: %s (%s)\n", clientInfo.CompanyName, clientInfo.ContactPerson)
         fmt.Printf("联系方式: %s\n", clientInfo.ContactEmail)
+        fmt.Printf("绑定模式: %s\n", clientInfo.BindingMode)
+        fmt.Printf("绑定提供者: %s\n", clientInfo.BindingProvider)
         fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02"))
     }
 
@@ -230,6 +252,8 @@ func main() {
     defer watcher.Stop()
 }
 ```
+
+> 💡 **版本提示**：`WithRuntimeVersion` 表示当前正在运行的软件实际版本，用于校验证书要求；`WithMinClientVersion` 表示签发证书时要求客户端至少达到的版本，两者互不冲突。
 
 ### 环境配置和安全等级
 

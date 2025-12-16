@@ -5,4 +5,15 @@
 // - 证书吊销管理
 // - 版本控制
 // - 授权时间管理
+
+// License（授权文件）
+//
+// 本包同时提供两种授权载体：
+// 1) X.509 证书授权（较“重”，可承载丰富扩展字段、支持吊销/监控/缓存）
+// 2) Ed25519 license 授权文件（较“轻”，更适合离线分发与快速校验）
+//
+// 推荐策略：
+// - 如果你需要“离线授权文件校验”：使用 license.go 的 IssueLicense / ValidateLicenseJSON
+// - 如果你需要“证书体系 + 扩展字段 + 吊销/监控”：使用 Authorizer/ValidateCert
+
 package cert

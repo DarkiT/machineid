@@ -80,8 +80,8 @@ func TestConfigLoader_LoadConfig_JSON(t *testing.T) {
 
 	// 创建有效的 JSON 配置
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: 12345,
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   12345,
 		CA: CAConfiguration{
 			UseDefault: true,
 		},
@@ -107,8 +107,8 @@ func TestConfigLoader_LoadConfig_JSON(t *testing.T) {
 		t.Fatalf("加载配置失败: %v", err)
 	}
 
-	if loadedConfig.Version != config.Version {
-		t.Errorf("版本不匹配: 期望 %s, 实际 %s", config.Version, loadedConfig.Version)
+	if loadedConfig.RuntimeVersion != config.RuntimeVersion {
+		t.Errorf("版本不匹配: 期望 %s, 实际 %s", config.RuntimeVersion, loadedConfig.RuntimeVersion)
 	}
 
 	if loadedConfig.EnterpriseID != config.EnterpriseID {
@@ -127,8 +127,8 @@ func TestConfigLoader_LoadConfig_YAML(t *testing.T) {
 
 	// 创建 JSON 配置(实际测试完整加载)
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: 67890,
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   67890,
 		CA: CAConfiguration{
 			UseDefault: true,
 		},
@@ -155,8 +155,8 @@ func TestConfigLoader_LoadConfig_YAML(t *testing.T) {
 		t.Fatalf("加载配置失败: %v", err)
 	}
 
-	if loadedConfig.Version != "1.0.0" {
-		t.Errorf("版本不匹配: 期望 1.0.0, 实际 %s", loadedConfig.Version)
+	if loadedConfig.RuntimeVersion != "1.0.0" {
+		t.Errorf("版本不匹配: 期望 1.0.0, 实际 %s", loadedConfig.RuntimeVersion)
 	}
 
 	if loadedConfig.EnterpriseID != 67890 {
@@ -201,8 +201,8 @@ func TestValidateConfig_InvalidEnterpriseID(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: 0, // 无效的企业 ID
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   0, // 无效的企业 ID
 		CA: CAConfiguration{
 			UseDefault: true,
 		},
@@ -231,8 +231,8 @@ func TestValidateCAConfig_MissingCA(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: 12345,
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   12345,
 		CA: CAConfiguration{
 			UseDefault:   false,
 			AutoGenerate: false,
@@ -261,8 +261,8 @@ func TestConfigFile_ToAuthorizerConfig(t *testing.T) {
 	t.Parallel()
 
 	configFile := &ConfigFile{
-		Version:      "2.0.0",
-		EnterpriseID: 99999,
+		RuntimeVersion: "2.0.0",
+		EnterpriseID:   99999,
 		CA: CAConfiguration{
 			UseDefault: true,
 		},
@@ -285,8 +285,8 @@ func TestConfigFile_ToAuthorizerConfig(t *testing.T) {
 		t.Fatalf("转换配置失败: %v", err)
 	}
 
-	if authConfig.Version != configFile.Version {
-		t.Errorf("版本不匹配: 期望 %s, 实际 %s", configFile.Version, authConfig.Version)
+	if authConfig.RuntimeVersion != configFile.RuntimeVersion {
+		t.Errorf("版本不匹配: 期望 %s, 实际 %s", configFile.RuntimeVersion, authConfig.RuntimeVersion)
 	}
 
 	if authConfig.EnterpriseID != configFile.EnterpriseID {
@@ -576,7 +576,7 @@ func TestGenerateDefaultConfig_JSON(t *testing.T) {
 		t.Fatalf("解析配置文件失败: %v", err)
 	}
 
-	if config.Version == "" {
+	if config.RuntimeVersion == "" {
 		t.Error("版本不应为空")
 	}
 
@@ -643,8 +643,8 @@ func TestFromConfigFile(t *testing.T) {
 
 	// 创建有效配置
 	config := ConfigFile{
-		Version:      "1.0.0",
-		EnterpriseID: 12345,
+		RuntimeVersion: "1.0.0",
+		EnterpriseID:   12345,
 		CA: CAConfiguration{
 			UseDefault: true,
 		},
@@ -666,8 +666,8 @@ func TestFromConfigFile(t *testing.T) {
 		t.Fatal("构建器不应为 nil")
 	}
 
-	if builder.config.Version != config.Version {
-		t.Errorf("版本不匹配: 期望 %s, 实际 %s", config.Version, builder.config.Version)
+	if builder.config.RuntimeVersion != config.RuntimeVersion {
+		t.Errorf("版本不匹配: 期望 %s, 实际 %s", config.RuntimeVersion, builder.config.RuntimeVersion)
 	}
 
 	if builder.config.EnterpriseID != config.EnterpriseID {
@@ -710,7 +710,7 @@ func TestParseSimpleYAML(t *testing.T) {
 	t.Parallel()
 
 	yamlContent := `# 测试配置
-version: "2.0.0"
+runtime_version: "2.0.0"
 enterprise_id: 54321
 `
 	var config ConfigFile
@@ -719,8 +719,8 @@ enterprise_id: 54321
 		t.Fatalf("解析 YAML 失败: %v", err)
 	}
 
-	if config.Version != "2.0.0" {
-		t.Errorf("版本不匹配: 期望 2.0.0, 实际 %s", config.Version)
+	if config.RuntimeVersion != "2.0.0" {
+		t.Errorf("版本不匹配: 期望 2.0.0, 实际 %s", config.RuntimeVersion)
 	}
 
 	if config.EnterpriseID != 54321 {
@@ -733,8 +733,8 @@ func TestMarshalSimpleYAML(t *testing.T) {
 	t.Parallel()
 
 	config := &ConfigFile{
-		Version:      "3.0.0",
-		EnterpriseID: 99999,
+		RuntimeVersion: "3.0.0",
+		EnterpriseID:   99999,
 		CA: CAConfiguration{
 			UseDefault:   true,
 			AutoGenerate: false,

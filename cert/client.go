@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	machineid "github.com/darkit/machineid"
 )
 
 // Identity 身份标识信息
 type Identity struct {
-	MachineID  string    // 机器码（可以是多个，用逗号分隔）
-	ExpiryDate time.Time // 授权过期日期
+	MachineID       string    // 机器码（可以是多个，用逗号分隔）
+	ExpiryDate      time.Time // 授权过期日期
+	BindingMode     string    // 绑定模式
+	BindingProvider string    // 绑定提供者
 }
 
 // Company 公司信息
@@ -37,7 +41,7 @@ type Contact struct {
 
 // Technical 技术信息
 type Technical struct {
-	Version            string // 程序版本
+	MinClientVersion   string // 最低客户端版本要求
 	ValidityPeriodDays int    // 证书有效期天数
 }
 
@@ -69,6 +73,24 @@ func (b *ClientCertRequestBuilder) WithMachineID(machineID string) *ClientCertRe
 	}
 	b.req.Identity.MachineID = machineID
 	return b
+}
+
+// WithBindingInfo 设置机器码绑定信息
+func (b *ClientCertRequestBuilder) WithBindingInfo(mode, provider string) *ClientCertRequestBuilder {
+	if b.req.Identity == nil {
+		b.req.Identity = &Identity{}
+	}
+	b.req.Identity.BindingMode = mode
+	b.req.Identity.BindingProvider = provider
+	return b
+}
+
+// WithBindingResult 直接使用 machineid 包返回的绑定结果
+func (b *ClientCertRequestBuilder) WithBindingResult(result *machineid.BindingResult) *ClientCertRequestBuilder {
+	if result == nil {
+		return b
+	}
+	return b.WithBindingInfo(string(result.Mode), result.Provider)
 }
 
 // WithExpiry 设置过期时间
@@ -113,12 +135,12 @@ func (b *ClientCertRequestBuilder) WithContact(person, phone, email string) *Cli
 	return b
 }
 
-// WithVersion 设置程序版本
-func (b *ClientCertRequestBuilder) WithVersion(version string) *ClientCertRequestBuilder {
+// WithMinClientVersion 设置最低客户端版本
+func (b *ClientCertRequestBuilder) WithMinClientVersion(version string) *ClientCertRequestBuilder {
 	if b.req.Technical == nil {
 		b.req.Technical = &Technical{}
 	}
-	b.req.Technical.Version = version
+	b.req.Technical.MinClientVersion = version
 	return b
 }
 
@@ -188,8 +210,8 @@ func (req *ClientCertRequest) Validate() error {
 		return errors.New("technical information is required")
 	}
 
-	if req.Technical.Version == "" {
-		return errors.New("version information is required")
+	if req.Technical.MinClientVersion == "" {
+		return errors.New("minimum client version is required")
 	}
 
 	// 验证机器码格式（可以是多个，用逗号分隔）
@@ -207,8 +229,8 @@ func (req *ClientCertRequest) Validate() error {
 	return nil
 }
 
-// GetMachineIDs 获取所有机器码列表
-func (req *ClientCertRequest) GetMachineIDs() []string {
+// MachineIDs 获取所有机器码列表
+func (req *ClientCertRequest) MachineIDs() []string {
 	if req.Identity == nil || req.Identity.MachineID == "" {
 		return nil
 	}

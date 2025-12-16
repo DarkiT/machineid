@@ -35,7 +35,7 @@ func TestValidationCachePutAndGet(t *testing.T) {
 		t.Fatalf("返回的错误与存储的不一致: %v", result)
 	}
 
-	stats := cache.GetStats()
+	stats := cache.Stats()
 	if stats.Hits == 0 || stats.Misses == 0 {
 		t.Fatalf("命中/未命中统计异常: %+v", stats)
 	}
@@ -77,7 +77,7 @@ func TestValidationCacheExpirationCleanup(t *testing.T) {
 	if cache.Size() != 0 {
 		t.Fatalf("过期清理后缓存应为空")
 	}
-	if cache.GetStats().Evicted == 0 {
+	if cache.Stats().Evicted == 0 {
 		t.Fatalf("应统计一次驱逐")
 	}
 }
@@ -105,7 +105,7 @@ func TestValidationCacheConcurrentAccess(t *testing.T) {
 	if cache.Size() > cache.config.MaxSize {
 		t.Fatalf("缓存大小不应超过上限: size=%d", cache.Size())
 	}
-	if rate := cache.GetHitRate(); rate <= 0 {
+	if rate := cache.HitRate(); rate <= 0 {
 		t.Fatalf("命中率应大于0，当前=%f", rate)
 	}
 }
@@ -137,7 +137,7 @@ func TestValidationCacheClear(t *testing.T) {
 	}
 
 	// 验证统计信息
-	stats := cache.GetStats()
+	stats := cache.Stats()
 	if stats.Size != 0 {
 		t.Errorf("清空后统计的大小应为 0，实际为 %d", stats.Size)
 	}
@@ -170,7 +170,7 @@ func TestValidationCacheHitRate(t *testing.T) {
 	}
 
 	// 验证命中率
-	hitRate := cache.GetHitRate()
+	hitRate := cache.HitRate()
 	expectedRate := 3.0 / 4.0 // 3 次命中，1 次未命中
 
 	if hitRate < expectedRate-0.01 || hitRate > expectedRate+0.01 {
@@ -221,7 +221,7 @@ func TestCachedAuthorizer_ValidateCert(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(machineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -250,7 +250,7 @@ func TestCachedAuthorizer_ValidateCert(t *testing.T) {
 	}
 
 	// 验证缓存统计
-	stats := cachedAuth.GetCacheStats()
+	stats := cachedAuth.CacheStats()
 	if stats.Hits != 1 {
 		t.Errorf("期望 1 次缓存命中，实际 %d 次", stats.Hits)
 	}
@@ -260,8 +260,8 @@ func TestCachedAuthorizer_ValidateCert(t *testing.T) {
 	}
 }
 
-// TestCachedAuthorizer_GetCacheHitRate 测试获取缓存命中率
-func TestCachedAuthorizer_GetCacheHitRate(t *testing.T) {
+// TestCachedAuthorizer_CacheHitRate 测试获取缓存命中率
+func TestCachedAuthorizer_CacheHitRate(t *testing.T) {
 	t.Parallel()
 
 	// 创建授权管理器
@@ -276,7 +276,7 @@ func TestCachedAuthorizer_GetCacheHitRate(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(machineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -305,7 +305,7 @@ func TestCachedAuthorizer_GetCacheHitRate(t *testing.T) {
 	}
 
 	// 验证命中率
-	hitRate := cachedAuth.GetCacheHitRate()
+	hitRate := cachedAuth.CacheHitRate()
 	expectedRate := 9.0 / 10.0 // 9 次命中，1 次未命中
 
 	if hitRate < expectedRate-0.01 || hitRate > expectedRate+0.01 {
@@ -329,7 +329,7 @@ func TestCachedAuthorizer_ClearCache(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(machineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -351,7 +351,7 @@ func TestCachedAuthorizer_ClearCache(t *testing.T) {
 	}
 
 	// 验证缓存有数据
-	stats := cachedAuth.GetCacheStats()
+	stats := cachedAuth.CacheStats()
 	if stats.Size == 0 {
 		t.Fatal("缓存应该有数据")
 	}
@@ -360,7 +360,7 @@ func TestCachedAuthorizer_ClearCache(t *testing.T) {
 	cachedAuth.ClearCache()
 
 	// 验证缓存已清空
-	stats = cachedAuth.GetCacheStats()
+	stats = cachedAuth.CacheStats()
 	if stats.Size != 0 {
 		t.Errorf("清空后缓存大小应为 0，实际为 %d", stats.Size)
 	}
@@ -414,7 +414,7 @@ func TestAuthorizerBuilder_BuildWithCache(t *testing.T) {
 	}
 
 	// 验证可以正常使用
-	stats := cachedAuth.GetCacheStats()
+	stats := cachedAuth.CacheStats()
 	if stats.MaxSize != 100 {
 		t.Errorf("缓存最大大小不匹配: 期望 100, 实际 %d", stats.MaxSize)
 	}
@@ -456,7 +456,7 @@ func TestValidationCache_CleanupLoop(t *testing.T) {
 	}
 
 	// 验证统计信息
-	stats := cache.GetStats()
+	stats := cache.Stats()
 	if stats.Evicted == 0 {
 		t.Error("应该有驱逐统计")
 	}

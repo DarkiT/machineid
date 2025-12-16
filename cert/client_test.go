@@ -18,7 +18,7 @@ func TestClientRequestBuilderBuildSuccess(t *testing.T) {
 		WithCompany("星火科技", "平台组").
 		WithAddress("CN", "GD", "SZ", "科苑路").
 		WithContact("张三", "18800000000", "ops@example.com").
-		WithVersion("1.2.3").
+		WithMinClientVersion("1.2.3").
 		WithValidityDays(90).
 		Build()
 	if err != nil {
@@ -34,7 +34,7 @@ func TestClientRequestBuilderBuildSuccess(t *testing.T) {
 	if req.Technical.ValidityPeriodDays != 90 {
 		t.Fatalf("有效期天数错误: 期望 90, 实际 %d", req.Technical.ValidityPeriodDays)
 	}
-	if got := req.GetMachineIDs(); !reflect.DeepEqual(got, []string{"machine-12345678"}) {
+	if got := req.MachineIDs(); !reflect.DeepEqual(got, []string{"machine-12345678"}) {
 		t.Fatalf("机器ID解析错误: %v", got)
 	}
 }
@@ -47,7 +47,7 @@ func TestClientRequestBuilderTemplate(t *testing.T) {
 		WithMachineID("machine-87654321").
 		WithCompany("凌云科技", "安全部").
 		WithContact("李四", "020-88886666", "contact@example.com").
-		WithVersion("3.2.1").
+		WithMinClientVersion("3.2.1").
 		WithTemplate("client-long").
 		Build()
 	if err != nil {
@@ -78,7 +78,7 @@ func TestClientCertRequestValidateErrors(t *testing.T) {
 				ExpiryDate: time.Now().Add(24 * time.Hour),
 			},
 			Company:   &Company{Name: "极客", Department: "技术"},
-			Technical: &Technical{Version: "1.0.0"},
+			Technical: &Technical{MinClientVersion: "1.0.0"},
 		}
 	}
 
@@ -111,9 +111,9 @@ func TestClientCertRequestValidateErrors(t *testing.T) {
 		{
 			name: "版本为空",
 			mutator: func(req *ClientCertRequest) {
-				req.Technical.Version = ""
+				req.Technical.MinClientVersion = ""
 			},
-			want: "version information is required",
+			want: "minimum client version is required",
 		},
 		{
 			name: "机器ID过短",
@@ -137,14 +137,14 @@ func TestClientCertRequestValidateErrors(t *testing.T) {
 	}
 }
 
-// TestClientCertRequestGetMachineIDs 验证多机器ID解析
-func TestClientCertRequestGetMachineIDs(t *testing.T) {
+// TestClientCertRequestMachineIDs 验证多机器ID解析
+func TestClientCertRequestMachineIDs(t *testing.T) {
 	t.Parallel()
 
 	req := &ClientCertRequest{
 		Identity: &Identity{MachineID: "node-1111 , node-2222,,node-3333"},
 	}
-	got := req.GetMachineIDs()
+	got := req.MachineIDs()
 	want := []string{"node-1111", "node-2222", "node-3333"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("解析结果不正确: got=%v want=%v", got, want)
@@ -161,7 +161,7 @@ func TestClientCertRequestSetDefaults(t *testing.T) {
 			ExpiryDate: time.Now().Add(72 * time.Hour),
 		},
 		Company:   &Company{Name: "星火", Department: ""},
-		Technical: &Technical{Version: "1.0.0"},
+		Technical: &Technical{MinClientVersion: "1.0.0"},
 	}
 
 	req.SetDefaults()

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	machineid "github.com/darkit/machineid"
 )
 
 // TestIssueClientCert_Success 测试正常的证书签发流程
@@ -46,7 +48,7 @@ func TestIssueClientCert_Success(t *testing.T) {
 			req, err := NewClientRequest().
 				WithMachineID(tt.machineID).
 				WithExpiry(expiryDate).
-				WithVersion(tt.appVersion).
+				WithMinClientVersion(tt.appVersion).
 				WithCompany("测试公司", "研发部").
 				WithValidityDays(365).
 				Build()
@@ -143,7 +145,6 @@ func TestIssueClientCert_InvalidRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			// 创建证书请求
 			req, err := tt.setupReq()
 			// 如果构建请求就失败了
@@ -188,7 +189,7 @@ func TestValidateCert_Success(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(machineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -222,7 +223,7 @@ func TestValidateCert_WrongMachineID(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(correctMachineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -304,7 +305,7 @@ func TestExtractClientInfo_Success(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(expectedMachineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion(expectedVersion).
+		WithMinClientVersion(expectedVersion).
 		WithCompany("测试公司", "研发部").
 		WithValidityDays(365).
 		Build()
@@ -329,8 +330,8 @@ func TestExtractClientInfo_Success(t *testing.T) {
 	}
 
 	// 验证版本信息（根据实际实现调整）
-	if info.Version != expectedVersion {
-		t.Errorf("版本信息不匹配: 期望 %q, 实际 %q", expectedVersion, info.Version)
+	if info.MinClientVersion != expectedVersion {
+		t.Errorf("版本信息不匹配: 期望 %q, 实际 %q", expectedVersion, info.MinClientVersion)
 	}
 }
 
@@ -357,6 +358,49 @@ func TestExtractClientInfo_InvalidCert(t *testing.T) {
 	}
 }
 
+func TestBindingInfoRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	auth, err := newTestAuthorizerBuilder(t).Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	binding := &machineid.BindingResult{
+		Hash:     "binding-machine-id",
+		Mode:     machineid.BindingModeMAC,
+		Provider: "eth0",
+	}
+
+	req, err := NewClientRequest().
+		WithMachineID(binding.Hash).
+		WithBindingResult(binding).
+		WithExpiry(time.Now().AddDate(1, 0, 0)).
+		WithCompany("绑定测试", "研发").
+		WithMinClientVersion("1.0.0").
+		Build()
+	if err != nil {
+		t.Fatalf("构建证书请求失败: %v", err)
+	}
+
+	certificate, err := auth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	info, err := auth.ExtractClientInfo(certificate.CertPEM)
+	if err != nil {
+		t.Fatalf("提取客户端信息失败: %v", err)
+	}
+
+	if info.BindingMode != string(binding.Mode) {
+		t.Fatalf("绑定模式不匹配: 期望 %s, 实际 %s", binding.Mode, info.BindingMode)
+	}
+	if info.BindingProvider != binding.Provider {
+		t.Fatalf("绑定提供者不匹配: 期望 %s, 实际 %s", binding.Provider, info.BindingProvider)
+	}
+}
+
 // TestCertificateLifecycle 测试完整的证书生命周期
 func TestCertificateLifecycle(t *testing.T) {
 	// 1. 创建授权管理器
@@ -373,7 +417,7 @@ func TestCertificateLifecycle(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID(machineID).
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion(appVersion).
+		WithMinClientVersion(appVersion).
 		WithCompany("生命周期测试公司", "测试部门").
 		WithValidityDays(365).
 		Build()
@@ -400,8 +444,8 @@ func TestCertificateLifecycle(t *testing.T) {
 	}
 
 	// 6. 验证提取的信息
-	if info.Version != appVersion {
-		t.Errorf("版本信息不匹配: 期望 %q, 实际 %q", appVersion, info.Version)
+	if info.MinClientVersion != appVersion {
+		t.Errorf("版本信息不匹配: 期望 %q, 实际 %q", appVersion, info.MinClientVersion)
 	}
 
 	// 7. 再次验证以确保一致性
@@ -431,7 +475,7 @@ func TestConcurrentCertIssue(t *testing.T) {
 			req, err := NewClientRequest().
 				WithMachineID(machineID).
 				WithExpiry(time.Now().AddDate(1, 0, 0)).
-				WithVersion("1.0.0").
+				WithMinClientVersion("1.0.0").
 				WithCompany("并发测试公司", "测试部门").
 				WithValidityDays(365).
 				Build()

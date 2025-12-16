@@ -7,6 +7,7 @@
 ### 📜 证书管理
 
 - **CA 证书生成**：支持自定义 CA 证书和私钥管理
+- **Ed25519 签名算法**：使用现代高效的 Ed25519 椭圆曲线签名，提供高安全性和优异性能
 - **客户端证书签发**：基于机器码的证书签发系统
 - **证书验证**：完整的证书链验证和有效性检查
 - **证书吊销**：动态吊销列表管理和实时更新
@@ -58,7 +59,7 @@ defaultAuth, err := cert.NewAuthorizer().Build()
 
 // 自定义安全级别
 customAuth, err := cert.NewAuthorizer().
-    WithVersion("2.0.0").
+    WithRuntimeVersion("2.0.0").
     WithSecurityLevel(2).                 // 高级安全保护
     WithMaxClockSkew(1 * time.Minute).
     Build()
@@ -68,13 +69,12 @@ customAuth, err := cert.NewAuthorizer().
 
 ```go
 caInfo := cert.CAInfo{
-    CommonName:   "ZStudio Software CA",
+    CommonName:   "ZStudio Software",
     Organization: "子说软件工作室",
     Country:      "CN",
     Province:     "Guangdong",
     Locality:     "Guangzhou",
     ValidDays:    3650, // 10年有效期
-    KeySize:      4096,
 }
 
 // 生成新的CA证书
@@ -91,10 +91,13 @@ err = auth.SaveCA("./certificates")
 
 ```go
 // 构建证书请求
+bindingResult, _ := machineid.ProtectedIDResult("your.app.id")
 req := &cert.ClientCertRequest{
     Identity: cert.Identity{
-        MachineID:  "DESKTOP-ABC123-HDD-12345678",
-        ExpiryDate: time.Now().AddDate(1, 0, 0), // 1年有效期
+        MachineID:      bindingResult.Hash,
+        BindingMode:    string(bindingResult.Mode),
+        BindingProvider: bindingResult.Provider,
+        ExpiryDate:     time.Now().AddDate(1, 0, 0), // 1年有效期
     },
     Company: cert.Company{
         Name:       "客户公司",
@@ -112,7 +115,7 @@ req := &cert.ClientCertRequest{
         Email:  "zhangsan@example.com",
     },
     Technical: cert.Technical{
-        Version:            "2.0.0",
+        MinClientVersion:   "2.0.0",
         ValidityPeriodDays: 365,
     },
 }
@@ -172,7 +175,9 @@ fmt.Printf("部门: %s\n", clientInfo.Department)
 fmt.Printf("联系人: %s\n", clientInfo.ContactPerson)
 fmt.Printf("联系电话: %s\n", clientInfo.ContactPhone)
 fmt.Printf("联系邮箱: %s\n", clientInfo.ContactEmail)
-fmt.Printf("程序版本: %s\n", clientInfo.Version)
+fmt.Printf("绑定模式: %s\n", clientInfo.BindingMode)
+fmt.Printf("绑定提供者: %s\n", clientInfo.BindingProvider)
+fmt.Printf("最低客户端版本: %s\n", clientInfo.MinClientVersion)
 fmt.Printf("证书有效期: %d天\n", clientInfo.ValidityPeriodDays)
 fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02 15:04:05"))
 
@@ -237,7 +242,7 @@ if err := watcher.Start(); err != nil {
 }
 
 // 获取监控统计
-stats := watcher.GetStats()
+stats := watcher.Stats()
 fmt.Printf("检查次数: %v, 运行状态: %v\n",
     stats["check_count"], stats["is_running"])
 
@@ -259,7 +264,7 @@ manager.AddWatcher("license1", watcher1)
 manager.AddWatcher("license2", watcher2)
 
 // 获取所有监控统计
-allStats := manager.GetAllStats()
+allStats := manager.AllStats()
 for id, stats := range allStats {
     fmt.Printf("%s: 检查%v次, 运行中=%v\n",
         id, stats["check_count"], stats["is_running"])
@@ -625,45 +630,67 @@ cache:
 // 创建批量管理器
 batchManager := cert.NewBatchManager(auth)
 
-// 添加批量签发任务
+// 批量签发证书
 requests := []*cert.ClientCertRequest{ /* ... */ }
-results := batchManager.IssueBatch(requests)
+results := batchManager.IssueMultipleCerts(requests)
 
-// 并发验证多个证书
-validationTasks := []cert.ValidationTask{ /* ... */ }
-results := batchManager.ValidateBatch(validationTasks)
+// 批量验证证书
+validations := []cert.CertValidation{ /* ... */ }
+validationResults := batchManager.ValidateMultipleCerts(validations)
 ```
 
 ### 缓存优化
 
 ```go
-// 创建缓存授权管理器
-cachedAuth := cert.NewCachedAuthorizer(auth, cert.CacheConfig{
-    TTL:             10 * time.Minute,
-    MaxSize:         1000,
-    CleanupInterval: 5 * time.Minute,
-})
+// 方式1：通过 Builder 创建带缓存的授权管理器
+cachedAuth, err := cert.NewAuthorizer().
+    WithCacheConfig(cert.CacheConfig{
+        TTL:             10 * time.Minute,
+        MaxSize:         1000,
+        CleanupInterval: 5 * time.Minute,
+    }).
+    BuildWithCache()
+
+// 方式2：为现有授权管理器添加缓存
+auth, _ := cert.NewAuthorizer().Build()
+cachedAuth := auth.WithCache()
 
 // 验证会自动使用缓存
 err := cachedAuth.ValidateCert(certPEM, machineID)
+
+// 查看缓存统计
+stats := cachedAuth.CacheStats()
+fmt.Printf("命中率: %.2f%%\n", cachedAuth.CacheHitRate()*100)
+
+// 清空缓存
+cachedAuth.ClearCache()
 ```
 
 ### 模板系统
 
 ```go
+// 创建模板管理器
+templateMgr := cert.NewTemplateManager()
+
 // 使用预定义模板
-template := cert.GetTemplate("enterprise")
-template.MaxValidDays = 730 // 2年有效期
+template, _ := templateMgr.Template("enterprise")
+fmt.Printf("有效期: %d天\n", template.ValidityDays)
 
-// 创建自定义模板
-customTemplate := &cert.CertificateTemplate{
-    DefaultValidDays: 365,
-    KeySize:         2048,
-    Organization:    "My Company",
-    // ...
+// 添加自定义模板
+customTemplate := &cert.CertTemplate{
+    Name:           "自定义模板",
+    Description:    "适用于特殊场景",
+    ValidityDays:   730, // 2年
+    SecurityLevel:  cert.TemplateSecurityLevelHigh,
+    RequiredFields: []string{"MachineID", "CompanyName"},
 }
+templateMgr.AddTemplate("custom", customTemplate)
 
-cert.RegisterTemplate("custom", customTemplate)
+// 使用模板验证请求
+err := templateMgr.ValidateRequestWithTemplate(req, "enterprise")
+
+// 应用模板到请求
+err = templateMgr.ApplyTemplate(req, "enterprise")
 ```
 
 ## 📊 错误处理
@@ -674,9 +701,10 @@ cert.RegisterTemplate("custom", customTemplate)
 err := auth.ValidateCert(certPEM, machineID)
 if err != nil {
     if certErr, ok := err.(*cert.CertError); ok {
-        fmt.Printf("错误类型: %s\n", certErr.GetCode())
-        fmt.Printf("错误详情: %v\n", certErr.GetDetails())
-        fmt.Printf("解决建议: %v\n", certErr.GetSuggestions())
+        fmt.Printf("错误类别: %d\n", certErr.ErrorType())
+        fmt.Printf("错误代码: %s\n", certErr.ErrorCode())
+        fmt.Printf("错误详情: %v\n", certErr.ErrorDetails())
+        fmt.Printf("解决建议: %v\n", certErr.ErrorSuggestions())
     }
 }
 ```
@@ -701,16 +729,17 @@ sm := auth.InitSecurityManager()
 // [SECURITY] 2024-01-20 15:30:46: Defense measures activated
 ```
 
-### 性能监控
+### 缓存统计
 
 ```go
-// 启用性能统计
-auth.EnableMetrics(true)
+// 获取缓存授权管理器
+cachedAuth := auth.WithCache()
 
-// 获取统计信息
-stats := auth.GetMetrics()
-fmt.Printf("验证成功率: %.2f%%\n", stats.SuccessRate)
-fmt.Printf("平均验证时间: %v\n", stats.AvgValidationTime)
+// 获取缓存统计信息
+stats := cachedAuth.CacheStats()
+fmt.Printf("缓存命中: %d\n", stats.Hits)
+fmt.Printf("缓存未命中: %d\n", stats.Misses)
+fmt.Printf("命中率: %.2f%%\n", cachedAuth.CacheHitRate()*100)
 ```
 
 ## 🏗️ 系统集成
@@ -722,6 +751,18 @@ func validateLicenseHandler(w http.ResponseWriter, r *http.Request) {
     certData := r.Header.Get("X-License-Cert")
     machineID := r.Header.Get("X-Machine-ID")
 
+    // 推荐：优先验证 license 文件（Ed25519），轻量且离线可验
+    // publicKeyPEM 应由服务端下发/配置，或在客户端内置
+    // pub, _ := cert.ParseEd25519PublicKeyPEM(publicKeyPEM)
+    // // machineID 推荐传 machineid.ProtectedIDResult(appID).Hash（而非原始 machine-id）
+    // // binding, _ := machineid.ProtectedIDResult(appID)
+    // // machineID := binding.Hash
+    // if _, err := cert.ValidateLicenseJSON([]byte(certData), pub, machineID, time.Now().UTC()); err != nil {
+    //     http.Error(w, "License validation failed", 403)
+    //     return
+    // }
+    //
+    // 如仍使用证书作为授权载体，可继续走 ValidateCert
     if err := auth.ValidateCert([]byte(certData), machineID); err != nil {
         http.Error(w, "License validation failed", 403)
         return
@@ -769,16 +810,6 @@ auth := cert.ForProduction().
     WithCA(prodCACert, prodCAKey).      // 使用生产CA
     WithCacheTTL(30 * time.Minute).     // 适中的缓存时间
     WithMaxClockSkew(1 * time.Minute).  // 严格的时间检查
-    Build()
-```
-
-### 集群部署
-
-```go
-// 支持多实例部署
-auth := cert.NewAuthorizer().
-    WithSharedCache(redis.NewClient()). // 使用Redis共享缓存
-    WithDistributedLock().              // 分布式锁
     Build()
 ```
 

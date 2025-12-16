@@ -8,7 +8,6 @@ import (
 
 // TestBatchManager_NewBatchManager 测试创建批量管理器
 func TestBatchManager_NewBatchManager(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -30,7 +29,6 @@ func TestBatchManager_NewBatchManager(t *testing.T) {
 
 // TestBatchManager_WithMaxWorkers 测试设置并发工作器数量
 func TestBatchManager_WithMaxWorkers(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -51,7 +49,6 @@ func TestBatchManager_WithMaxWorkers(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-
 			bm := auth.NewBatchManager().WithMaxWorkers(tt.workers)
 			if bm.maxWorkers != tt.expected {
 				t.Errorf("期望工作器数量 %d，实际 %d", tt.expected, bm.maxWorkers)
@@ -62,7 +59,6 @@ func TestBatchManager_WithMaxWorkers(t *testing.T) {
 
 // TestBatchManager_IssueMultipleCerts_Empty 测试空请求列表
 func TestBatchManager_IssueMultipleCerts_Empty(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -83,7 +79,6 @@ func TestBatchManager_IssueMultipleCerts_Empty(t *testing.T) {
 
 // TestBatchManager_IssueMultipleCerts_Success 测试批量签发证书成功
 func TestBatchManager_IssueMultipleCerts_Success(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -95,7 +90,7 @@ func TestBatchManager_IssueMultipleCerts_Success(t *testing.T) {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("batch-machine-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
-			WithVersion("1.0.0").
+			WithMinClientVersion("1.0.0").
 			WithCompany("批量测试公司", "研发部").
 			WithValidityDays(365).
 			Build()
@@ -146,7 +141,7 @@ func TestBatchManager_IssueMultipleCerts_Concurrent(t *testing.T) {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("concurrent-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
-			WithVersion("1.0.0").
+			WithMinClientVersion("1.0.0").
 			WithCompany("并发测试", "测试部").
 			WithValidityDays(365).
 			Build()
@@ -183,7 +178,6 @@ func TestBatchManager_IssueMultipleCerts_Concurrent(t *testing.T) {
 
 // TestBatchManager_ValidateMultipleCerts_Empty 测试空验证列表
 func TestBatchManager_ValidateMultipleCerts_Empty(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -204,7 +198,6 @@ func TestBatchManager_ValidateMultipleCerts_Empty(t *testing.T) {
 
 // TestBatchManager_ValidateMultipleCerts_Success 测试批量验证证书
 func TestBatchManager_ValidateMultipleCerts_Success(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -217,7 +210,7 @@ func TestBatchManager_ValidateMultipleCerts_Success(t *testing.T) {
 		req, err := NewClientRequest().
 			WithMachineID(machineID).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
-			WithVersion("1.0.0").
+			WithMinClientVersion("1.0.0").
 			WithCompany("验证测试", "测试部").
 			WithValidityDays(365).
 			Build()
@@ -266,7 +259,6 @@ func TestBatchManager_ValidateMultipleCerts_Success(t *testing.T) {
 
 // TestBatchIssueBuilder_Basic 测试批量签发构建器基本功能
 func TestBatchIssueBuilder_Basic(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -288,7 +280,6 @@ func TestBatchIssueBuilder_Basic(t *testing.T) {
 
 // TestBatchIssueBuilder_AddRequest 测试添加单个请求
 func TestBatchIssueBuilder_AddRequest(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -297,7 +288,7 @@ func TestBatchIssueBuilder_AddRequest(t *testing.T) {
 	req, err := NewClientRequest().
 		WithMachineID("test-machine-add").
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试", "部门").
 		WithValidityDays(365).
 		Build()
@@ -319,7 +310,6 @@ func TestBatchIssueBuilder_AddRequest(t *testing.T) {
 
 // TestBatchIssueBuilder_AddRequests 测试添加多个请求
 func TestBatchIssueBuilder_AddRequests(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -330,7 +320,7 @@ func TestBatchIssueBuilder_AddRequests(t *testing.T) {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("test-multi-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
-			WithVersion("1.0.0").
+			WithMinClientVersion("1.0.0").
 			WithCompany("测试", "部门").
 			WithValidityDays(365).
 			Build()
@@ -348,7 +338,6 @@ func TestBatchIssueBuilder_AddRequests(t *testing.T) {
 
 // TestBatchIssueBuilder_WithMaxWorkers 测试设置工作器数量
 func TestBatchIssueBuilder_WithMaxWorkers(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -362,7 +351,6 @@ func TestBatchIssueBuilder_WithMaxWorkers(t *testing.T) {
 
 // TestBatchIssueBuilder_Execute 测试执行批量签发
 func TestBatchIssueBuilder_Execute(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -372,7 +360,7 @@ func TestBatchIssueBuilder_Execute(t *testing.T) {
 	req1, _ := NewClientRequest().
 		WithMachineID("exec-test-1").
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试", "部门").
 		WithValidityDays(365).
 		Build()
@@ -380,7 +368,7 @@ func TestBatchIssueBuilder_Execute(t *testing.T) {
 	req2, _ := NewClientRequest().
 		WithMachineID("exec-test-2").
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试", "部门").
 		WithValidityDays(365).
 		Build()
@@ -408,7 +396,6 @@ func TestBatchIssueBuilder_Execute(t *testing.T) {
 
 // TestBatchValidateBuilder_Basic 测试批量验证构建器基本功能
 func TestBatchValidateBuilder_Basic(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -430,7 +417,6 @@ func TestBatchValidateBuilder_Basic(t *testing.T) {
 
 // TestBatchValidateBuilder_AddValidation 测试添加验证请求
 func TestBatchValidateBuilder_AddValidation(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -455,7 +441,6 @@ func TestBatchValidateBuilder_AddValidation(t *testing.T) {
 
 // TestBatchValidateBuilder_AddValidations 测试添加多个验证请求
 func TestBatchValidateBuilder_AddValidations(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -475,7 +460,6 @@ func TestBatchValidateBuilder_AddValidations(t *testing.T) {
 
 // TestBatchValidateBuilder_Execute 测试执行批量验证
 func TestBatchValidateBuilder_Execute(t *testing.T) {
-
 	auth, err := newTestAuthorizerBuilder(t).Build()
 	if err != nil {
 		t.Fatalf("创建授权管理器失败: %v", err)
@@ -485,7 +469,7 @@ func TestBatchValidateBuilder_Execute(t *testing.T) {
 	req, _ := NewClientRequest().
 		WithMachineID("validate-exec-test").
 		WithExpiry(time.Now().AddDate(1, 0, 0)).
-		WithVersion("1.0.0").
+		WithMinClientVersion("1.0.0").
 		WithCompany("测试", "部门").
 		WithValidityDays(365).
 		Build()
@@ -510,9 +494,8 @@ func TestBatchValidateBuilder_Execute(t *testing.T) {
 	}
 }
 
-// TestGetIssueStats 测试获取签发统计
-func TestGetIssueStats(t *testing.T) {
-
+// TestIssueStats 测试获取签发统计
+func TestIssueStats(t *testing.T) {
 	tests := []struct {
 		name    string
 		results []BatchResult
@@ -560,8 +543,7 @@ func TestGetIssueStats(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-
-			stats := GetIssueStats(tt.results)
+			stats := IssueStats(tt.results)
 
 			if stats.Total != tt.want.Total {
 				t.Errorf("Total: 期望 %d, 实际 %d", tt.want.Total, stats.Total)
@@ -588,9 +570,8 @@ func TestGetIssueStats(t *testing.T) {
 	}
 }
 
-// TestGetValidationStats 测试获取验证统计
-func TestGetValidationStats(t *testing.T) {
-
+// TestValidationStats 测试获取验证统计
+func TestValidationStats(t *testing.T) {
 	tests := []struct {
 		name    string
 		results []ValidationResult
@@ -638,8 +619,7 @@ func TestGetValidationStats(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-
-			stats := GetValidationStats(tt.results)
+			stats := ValidationStats(tt.results)
 
 			if stats.Total != tt.want.Total {
 				t.Errorf("Total: 期望 %d, 实际 %d", tt.want.Total, stats.Total)

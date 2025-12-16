@@ -1,16 +1,15 @@
 package cert
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // SecurityLevel 安全防护级别
@@ -20,6 +19,29 @@ const (
 	SecurityLevelAdvanced = 2 // 高级防护（完整反逆向保护）
 	SecurityLevelCritical = 3 // 关键防护（最高级别保护）
 )
+
+// TimeDetectionConfig 时间检测配置
+//
+// 用于对抗基于时间的调试检测绕过：
+// - 随机化阈值避免固定特征
+// - 多次采样减少误报
+// - 混淆工作负载防止空循环被优化
+type TimeDetectionConfig struct {
+	BaseThreshold    time.Duration // 基础阈值（默认 10ms）
+	RandomRange      time.Duration // 随机范围（默认 5ms）
+	SampleCount      int           // 采样次数（默认 3）
+	FailureThreshold int           // 失败阈值（默认 2，即3次中2次失败）
+}
+
+// DefaultTimeDetectionConfig 返回默认时间检测配置
+func DefaultTimeDetectionConfig() TimeDetectionConfig {
+	return TimeDetectionConfig{
+		BaseThreshold:    10 * time.Millisecond,
+		RandomRange:      5 * time.Millisecond,
+		SampleCount:      3,
+		FailureThreshold: 2,
+	}
+}
 
 // SecurityManager 安全管理器
 type SecurityManager struct {
@@ -94,25 +116,80 @@ func checkAdvancedDebugger() bool {
 		return true
 	}
 
+	// 方法6: ASLR 绕过检测
+	if detectASLRBypass() {
+		return true
+	}
+
+	// 方法7: CFI 违规检测
+	if detectCFIViolation() {
+		return true
+	}
+
 	return false
 }
 
-// detectTimeBasedDebugging 时间差攻击检测
+// detectTimeBasedDebugging 时间差攻击检测（使用默认配置）
 func detectTimeBasedDebugging() bool {
-	// 记录开始时间
+	return detectTimeBasedDebuggingEnhanced(DefaultTimeDetectionConfig())
+}
+
+// detectTimeBasedDebuggingEnhanced 增强的时间差攻击检测
+//
+// 使用多重采样和随机化阈值对抗调试器时间伪造：
+// - 每次采样使用不同的阈值（避免固定特征）
+// - 多次采样中达到失败阈值才判定为调试
+// - 使用混淆工作负载防止编译器优化
+func detectTimeBasedDebuggingEnhanced(config TimeDetectionConfig) bool {
+	failures := 0
+	for i := 0; i < config.SampleCount; i++ {
+		// 随机化阈值
+		threshold := config.BaseThreshold + time.Duration(randomInt(int64(config.RandomRange)))
+		if performTimedWorkload(threshold) {
+			failures++
+		}
+		// 达到失败阈值则判定为调试
+		if failures >= config.FailureThreshold {
+			return true
+		}
+	}
+	return false
+}
+
+// performTimedWorkload 执行混淆的工作负载并检测时间异常
+func performTimedWorkload(threshold time.Duration) bool {
 	start := time.Now()
 
-	// 执行一些快速操作
-	sum := 0
-	for i := 0; i < 1000; i++ {
-		sum += i
+	// 混淆的工作负载：防止编译器优化掉空循环
+	var result uint64
+	iterations := 1000 + randomInt(500) // 随机化迭代次数
+	for i := 0; i < int(iterations); i++ {
+		result ^= uint64(i) * 0x5DEECE66D
+		result = (result + 0xB) & ((1 << 48) - 1)
 	}
 
-	// 检查执行时间
-	duration := time.Since(start)
+	// 保留中间结果，避免被完全优化
+	runtime.KeepAlive(result)
 
-	// 如果执行时间异常长，可能正在被调试
-	return duration > time.Millisecond*10
+	duration := time.Since(start)
+	return duration > threshold
+}
+
+// randomInt 生成 [0, max) 范围内的随机整数
+func randomInt(max int64) int64 {
+	if max <= 0 {
+		return 0
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return 0
+	}
+	n := int64(buf[0]) | int64(buf[1])<<8 | int64(buf[2])<<16 | int64(buf[3])<<24 |
+		int64(buf[4])<<32 | int64(buf[5])<<40 | int64(buf[6])<<48 | int64(buf[7])<<56
+	if n < 0 {
+		n = -n
+	}
+	return n % max
 }
 
 // detectDebuggerProcess 检测调试器进程
@@ -158,16 +235,70 @@ func detectWindowsDebugger(_ []string) bool {
 	return false
 }
 
+// isDebuggerPresentWindows Windows API 调用检测调试器
+func isDebuggerPresentWindows() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	return checkDebugger()
+}
+
+// checkPEBDebugFlag 检查 PEB 中的调试标志
+func checkPEBDebugFlag() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	// 通过检查异常处理行为来推断是否有调试器
+	suspicious := false
+	defer func() {
+		if r := recover(); r != nil {
+			suspicious = true
+		}
+	}()
+	start := time.Now()
+	dummy := 0
+	for i := 0; i < 10; i++ {
+		dummy += i
+	}
+	_ = dummy
+	elapsed := time.Since(start)
+	return elapsed > time.Millisecond*5 || suspicious
+}
+
+// checkDebugPort 检查调试端口
+func checkDebugPort() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	return checkDebugger()
+}
+
 // detectLinuxDebugger Linux调试器检测
-func detectLinuxDebugger(_ []string) bool {
-	// 检查/proc/self/status中的TracerPid
-	if checkLinuxTracerPid() {
-		return true
+func detectLinuxDebugger(debuggerNames []string) bool {
+	// 检查 /proc/self/status 中的TracerPid
+	if data, err := os.ReadFile("/proc/self/status"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "TracerPid:") {
+			lines := strings.Split(content, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "TracerPid:") {
+					parts := strings.Fields(line)
+					if len(parts) >= 2 && parts[1] != "0" {
+						return true
+					}
+				}
+			}
+		}
 	}
 
-	// 检查ptrace
-	if checkPtraceUsage() {
-		return true
+	// 检查进程名称
+	if data, err := os.ReadFile("/proc/self/cmdline"); err == nil {
+		cmdline := strings.ToLower(string(data))
+		for _, name := range debuggerNames {
+			if strings.Contains(cmdline, name) {
+				return true
+			}
+		}
 	}
 
 	return false
@@ -175,126 +306,76 @@ func detectLinuxDebugger(_ []string) bool {
 
 // detectMacDebugger macOS调试器检测
 func detectMacDebugger(_ []string) bool {
-	// macOS特定检测逻辑
-	return checkMacOSDebugging()
+	// 简化实现：检查进程名称
+	// 实际应该使用 sysctl 或者 proc_info
+	return false
 }
 
 // detectSystemCallTracing 系统调用跟踪检测
 func detectSystemCallTracing() bool {
-	// 通过异常处理和系统调用监测调试器
-	return checkSyscallInterception()
+	// Linux: 检查 ptrace
+	if runtime.GOOS == "linux" {
+		// 简化实现：读取 /proc/self/status
+		return false
+	}
+	return false
 }
 
 // detectMemoryDebugging 内存调试检测
 func detectMemoryDebugging() bool {
-	// 检查内存布局异常
-	return checkMemoryLayout()
+	// 检查内存页属性异常
+	return false
 }
 
 // detectDebuggerAPI 调试器API检测
 func detectDebuggerAPI() bool {
-	if runtime.GOOS == "windows" {
-		// Windows调试器API检测
-		return checkWindowsDebugAPI()
-	}
+	// 平台特定的API检测
 	return false
 }
 
-// === 防篡改功能 ===
+// detectASLRBypass 检测 ASLR（地址空间布局随机化）绕过
+//
+// 原理：检查函数地址是否在合理范围内。
+// 注意：Go 函数地址在同一进程内是固定的，这里主要检查地址范围异常。
+func detectASLRBypass() bool {
+	// 使用 runtime.FuncForPC 获取函数信息
+	pc := make([]uintptr, 1)
+	runtime.Callers(1, pc)
 
-// CalculateChecksum 计算校验和
-func (sm *SecurityManager) calculateChecksum() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	// uintptr 为无符号，直接与阈值比较即可
+	if pc[0] < 0x10000 || pc[0] > 0x7fffffffffff {
+		return true
+	}
 
-	// 获取当前程序的内存映像
-	data := sm.getCriticalMemoryRegions()
-	hash := sha256.Sum256(data)
-	copy(sm.checksum, hash[:])
-	sm.lastCheckTime = time.Now()
+	return false
 }
 
-// VerifyIntegrity 验证完整性
-func (sm *SecurityManager) VerifyIntegrity() error {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+// detectCFIViolation 检测控制流完整性（CFI）违规
+//
+// 原理：通过调用栈深度和返回地址合理性检测异常控制流。
+func detectCFIViolation() bool {
+	// 检查调用栈深度
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(1, pcs)
 
-	// 计算当前校验和
-	data := sm.getCriticalMemoryRegions()
-	hash := sha256.Sum256(data)
+	// 异常深的调用栈可能表示递归注入或栈溢出
+	if n > 30 {
+		return true
+	}
 
-	// 比较校验和
-	for i, b := range hash {
-		if i >= len(sm.checksum) || sm.checksum[i] != b {
-			return NewSecurityError(ErrUnauthorizedAccess,
-				"code integrity check failed - possible tampering detected", nil).
-				WithDetail("expected_hash", fmt.Sprintf("%x", sm.checksum)).
-				WithDetail("actual_hash", fmt.Sprintf("%x", hash)).
-				WithSuggestion("程序可能被篡改，请重新安装原始版本")
+	// 检查返回地址的连续性
+	for i := 1; i < n; i++ {
+		pc1 := int64(pcs[i-1])
+		pc2 := int64(pcs[i])
+
+		// 正常调用栈的地址应该相对接近（同一模块内）
+		diff := pc1 - pc2
+		if diff < 0 {
+			diff = -diff
 		}
-	}
 
-	return nil
-}
-
-// getCriticalMemoryRegions 获取关键内存区域
-func (sm *SecurityManager) getCriticalMemoryRegions() []byte {
-	// 这里应该获取程序的关键部分
-	// 为了演示，我们使用一些固定数据
-	data := make([]byte, 0, 1024)
-
-	// 添加当前函数的一些信息
-	data = append(data, []byte("cert-security-check")...)
-	data = append(data, sm.memProtect...)
-
-	// 添加一些运行时信息
-	runtime_info := fmt.Sprintf("%s-%s-%d",
-		runtime.GOOS, runtime.GOARCH, runtime.NumGoroutine())
-	data = append(data, []byte(runtime_info)...)
-
-	return data
-}
-
-// === 环境检测 ===
-
-// DetectVirtualMachine 检测虚拟机环境
-func (sm *SecurityManager) DetectVirtualMachine() bool {
-	// 检测VMware
-	if sm.detectVMware() {
-		return true
-	}
-
-	// 检测VirtualBox
-	if sm.detectVirtualBox() {
-		return true
-	}
-
-	// 检测Hyper-V
-	if sm.detectHyperV() {
-		return true
-	}
-
-	// 检测QEMU
-	if sm.detectQEMU() {
-		return true
-	}
-
-	return false
-}
-
-// detectVMware 检测VMware
-func (sm *SecurityManager) detectVMware() bool {
-	// 检查VMware特有的设备和注册表项
-	vmwareIndicators := []string{
-		"VMware",
-		"vmware",
-		"VBOX",
-		"QEMU",
-	}
-
-	hostname, _ := os.Hostname()
-	for _, indicator := range vmwareIndicators {
-		if strings.Contains(strings.ToLower(hostname), strings.ToLower(indicator)) {
+		// 如果地址差异过大（>10MB），可能是跨模块注入
+		if diff > 10*1024*1024 {
 			return true
 		}
 	}
@@ -302,751 +383,309 @@ func (sm *SecurityManager) detectVMware() bool {
 	return false
 }
 
-// detectVirtualBox 检测VirtualBox
-func (sm *SecurityManager) detectVirtualBox() bool {
-	// VirtualBox检测逻辑
-	return sm.checkVirtualBoxArtifacts()
-}
-
-// detectHyperV 检测Hyper-V
-func (sm *SecurityManager) detectHyperV() bool {
-	// Hyper-V检测逻辑
-	return sm.checkHyperVArtifacts()
-}
-
-// detectQEMU 检测QEMU
-func (sm *SecurityManager) detectQEMU() bool {
-	// QEMU检测逻辑
-	return sm.checkQEMUArtifacts()
-}
-
-// DetectSandbox 检测沙箱环境
-func (sm *SecurityManager) DetectSandbox() bool {
-	// 检测各种沙箱特征
-	if sm.detectCuckooSandbox() {
-		return true
-	}
-
-	if sm.detectJoeSandbox() {
-		return true
-	}
-
-	if sm.detectAnubis() {
-		return true
-	}
-
-	return false
-}
-
-// === 进程保护 ===
-
-// ProtectProcess 进程保护
-func (sm *SecurityManager) ProtectProcess() error {
-	// 对关键级别在设置内存保护之前完成数据加密
-	if sm.level >= SecurityLevelCritical {
-		if err := sm.enableDataEncryption(); err != nil {
-			return err
-		}
-	}
-
-	if sm.level >= SecurityLevelAdvanced {
-		// 启用反注入保护
-		if err := sm.enableAntiInjection(); err != nil {
-			return err
-		}
-
-		// 启用内存保护（设置为只读）
-		if err := sm.enableMemoryProtection(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// enableAntiInjection 启用反注入保护
-func (sm *SecurityManager) enableAntiInjection() error {
-	// DLL注入检测
-	if sm.detectDLLInjection() {
-		return NewSecurityError(ErrUnauthorizedAccess,
-			"DLL injection detected", nil)
-	}
-
-	// 代码注入检测
-	if sm.detectCodeInjection() {
-		return NewSecurityError(ErrUnauthorizedAccess,
-			"code injection detected", nil)
-	}
-
-	return nil
-}
-
-// enableMemoryProtection 启用内存保护
-func (sm *SecurityManager) enableMemoryProtection() error {
-	// 关键内存区域加密
-	sm.encryptCriticalMemory()
-
-	// 设置内存访问权限
-	return sm.setMemoryPermissions()
-}
-
-// enableDataEncryption 启用数据加密
-func (sm *SecurityManager) enableDataEncryption() error {
-	// 生成加密密钥
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return err
-	}
-
-	// 加密关键数据
-	return sm.encryptSensitiveData(key)
-}
-
-// === 后台安全检查 ===
-
 // backgroundSecurityCheck 后台安全检查
 func (sm *SecurityManager) backgroundSecurityCheck() {
-	defer sm.wg.Done() // 确保退出时通知WaitGroup
+	defer sm.wg.Done()
 
-	ticker := time.NewTicker(time.Second * 5)
+	ticker := time.NewTicker(time.Second * 30)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if !sm.antiDebugActive {
-				return
+			sm.mu.Lock()
+			if sm.level >= SecurityLevelAdvanced {
+				// 检查调试器
+				if checkAdvancedDebugger() {
+					sm.debuggerCount++
+				}
+
+				// 检查内存完整性
+				if !sm.verifyMemoryIntegrity() {
+					sm.debuggerCount++
+				}
 			}
-			// 执行各种安全检查
-			sm.performSecurityChecks()
+			sm.mu.Unlock()
 		case <-sm.done:
-			// 收到停止信号，立即退出
 			return
 		}
 	}
 }
 
-// performSecurityChecks 执行安全检查
-func (sm *SecurityManager) performSecurityChecks() {
+// calculateChecksum 计算校验和
+func (sm *SecurityManager) calculateChecksum() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// 检测调试器
-	if checkAdvancedDebugger() {
-		sm.debuggerCount++
-		if sm.debuggerCount > 3 {
-			// 多次检测到调试器，执行防御措施
-			sm.executeDefenseMeasures()
-		}
-	} else {
-		// 重置计数器
-		if sm.debuggerCount > 0 {
-			sm.debuggerCount--
-		}
-	}
-
-	// 验证完整性
-	if time.Since(sm.lastCheckTime) > time.Minute*5 {
-		if err := sm.VerifyIntegrity(); err != nil {
-			sm.executeDefenseMeasures()
-		}
-	}
-
-	// 检测虚拟机和沙箱
-	if sm.level >= SecurityLevelAdvanced {
-		if sm.DetectVirtualMachine() || sm.DetectSandbox() {
-			// 在虚拟环境中运行，可以选择性地限制功能
-			sm.handleVirtualEnvironment()
-		}
-	}
+	// 使用 SHA-256 计算内存保护区域校验和
+	hash := sha256.Sum256(sm.memProtect)
+	copy(sm.checksum, hash[:])
 }
 
-// executeDefenseMeasures 执行防御措施
-func (sm *SecurityManager) executeDefenseMeasures() {
-	// 可以选择不同的防御策略：
-	// 1. 优雅退出
-	// 2. 混淆输出
-	// 3. 自毁功能
-	// 4. 发送警报
+// verifyMemoryIntegrity 验证内存完整性
+func (sm *SecurityManager) verifyMemoryIntegrity() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 
-	// 这里我们选择优雅退出并记录事件
-	sm.logSecurityEvent("Defense measures activated - potential security threat detected")
-
-	// 清理敏感数据
-	sm.clearSensitiveData()
-
-	// 可选择退出程序
-	if sm.level >= SecurityLevelCritical {
-		os.Exit(1)
-	}
-}
-
-// handleVirtualEnvironment 处理虚拟环境
-func (sm *SecurityManager) handleVirtualEnvironment() {
-	// 在虚拟环境中的处理逻辑
-	// 可以限制某些功能或提供模拟数据
-	sm.logSecurityEvent("Virtual environment detected")
-}
-
-// logSecurityEvent 记录安全事件
-func (sm *SecurityManager) logSecurityEvent(event string) {
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Printf("[SECURITY] %s: %s\n", timestamp, event)
-}
-
-// clearSensitiveData 清理敏感数据
-func (sm *SecurityManager) clearSensitiveData() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// 清零敏感内存区域
-	for i := range sm.memProtect {
-		sm.memProtect[i] = 0
-	}
-	for i := range sm.checksum {
-		sm.checksum[i] = 0
-	}
-}
-
-// StopSecurityChecks 停止安全检查
-func (sm *SecurityManager) StopSecurityChecks() {
-	sm.mu.Lock()
-	sm.antiDebugActive = false
-
-	// 关闭done channel以立即停止后台goroutine
-	select {
-	case <-sm.done:
-		// 已经关闭，不再重复关闭
-	default:
-		close(sm.done)
-	}
-	sm.mu.Unlock()
-
-	// 等待后台goroutine完全退出
-	sm.wg.Wait()
-}
-
-// === 特定平台实现 ===
-
-// Windows特定实现
-func isDebuggerPresentWindows() bool {
-	// Windows API调用检测调试器
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-func checkPEBDebugFlag() bool {
-	// 检查PEB中的调试标志
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// Windows特定：检查PEB结构中的调试标志
-	// 这需要直接内存访问，为安全考虑使用间接方法
-	// 通过检查异常处理行为来推断是否有调试器
-	suspicious := false
-	defer func() {
-		if r := recover(); r != nil {
-			// 在调试器环境下异常处理可能不同，将其标记为可疑
-			suspicious = true
+	hash := sha256.Sum256(sm.memProtect)
+	// SHA-256 输出 32 字节，与 checksum 长度匹配
+	for i := 0; i < len(hash); i++ {
+		if sm.checksum[i] != hash[i] {
+			return false
 		}
-	}()
-
-	// 简单的反调试技术：检查时间差异
-	start := time.Now()
-	dummy := 0
-	for i := 0; i < 10; i++ {
-		// 通过轻量计算避免空循环导致的 lint 告警
-		dummy += i
 	}
-	_ = dummy
-	duration := time.Since(start)
-
-	// 如果执行时间异常长，可能在调试环境中
-	if suspicious {
-		return true
-	}
-	return duration > time.Microsecond*100
+	return true
 }
 
-func checkDebugPort() bool {
-	// 检查调试端口
-	if runtime.GOOS != "windows" {
-		return false
+// Check 执行安全检查
+func (sm *SecurityManager) Check() error {
+	sm.mu.RLock()
+	level := sm.level
+	count := sm.debuggerCount
+	sm.mu.RUnlock()
+
+	if level == SecurityLevelDisabled {
+		return nil
 	}
 
-	// Windows特定：通过NtQueryInformationProcess检查调试端口
-	// 这个功能已经在cert_windows.go中实现了
-	return checkDebugger()
-}
-
-func checkWindowsDebugAPI() bool {
-	// 检查Windows调试API
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 检查是否有调试器API被调用
-	// 这包括检查调试器相关的DLL是否被加载
-	// 以及检查某些调试器特有的行为
-
-	// 简单实现：检查是否有常见调试器进程
-	return detectWindowsDebugger([]string{"windbg", "x32dbg", "x64dbg", "ollydbg"})
-}
-
-// Linux特定实现
-func checkLinuxTracerPid() bool {
-	// 检查/proc/self/status中的TracerPid
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-func checkPtraceUsage() bool {
-	// 检查ptrace使用情况
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 检查ptrace系统调用的使用情况
-	// 通过尝试ptrace自身来检测是否已被调试
-	// 如果进程已经被ptrace，再次ptrace会失败
-
-	// 这里使用更安全的方法：检查/proc/self/status
-	// 以及检查父进程是否可疑
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		return false
-	}
-
-	// 检查是否有tracer
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "TracerPid:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[1] != "0" {
-				return true
-			}
+	// 基础检查
+	if level >= SecurityLevelBasic {
+		if checkDebugger() {
+			return fmt.Errorf("security: debugger detected")
 		}
 	}
 
-	return false
-}
+	// 高级检查
+	if level >= SecurityLevelAdvanced {
+		if checkAdvancedDebugger() {
+			return fmt.Errorf("security: advanced debugging detected")
+		}
 
-// macOS特定实现
-func checkMacOSDebugging() bool {
-	// macOS调试检测
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-// 通用实现
-func checkSyscallInterception() bool {
-	// 系统调用拦截检测
-	// 检查系统调用是否被拦截或监控
-
-	// 方法：测量系统调用执行时间
-	start := time.Now()
-
-	// 执行一个简单的系统调用
-	_ = os.Getpid()
-
-	duration := time.Since(start)
-
-	// 如果系统调用执行时间异常长，可能被拦截
-	return duration > time.Microsecond*50
-}
-
-func checkMemoryLayout() bool {
-	// 内存布局检测
-	// 检查内存布局是否异常（可能表示在虚拟或调试环境中）
-
-	// 创建一些变量检查它们的内存地址
-	a := 1
-	b := 2
-	c := 3
-
-	addr_a := uintptr(unsafe.Pointer(&a))
-	addr_b := uintptr(unsafe.Pointer(&b))
-	addr_c := uintptr(unsafe.Pointer(&c))
-
-	// 检查地址间距是否异常
-	// 正常情况下，连续声明的变量地址应该相对接近
-	var diff1 uintptr
-	if addr_b >= addr_a {
-		diff1 = addr_b - addr_a
-	} else {
-		diff1 = addr_a - addr_b
-	}
-
-	var diff2 uintptr
-	if addr_c >= addr_b {
-		diff2 = addr_c - addr_b
-	} else {
-		diff2 = addr_b - addr_c
-	}
-
-	// 如果地址间距异常大，可能在特殊环境中
-	return diff1 > 1024 || diff2 > 1024
-}
-
-// 虚拟机检测辅助函数
-func (sm *SecurityManager) checkVirtualBoxArtifacts() bool {
-	// VirtualBox检测特征
-	vboxIndicators := []string{
-		"VirtualBox",
-		"VBOX",
-		"vbox",
-		"Oracle",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range vboxIndicators {
-		if strings.Contains(strings.ToLower(hostname), strings.ToLower(indicator)) {
-			return true
+		if !sm.verifyMemoryIntegrity() {
+			return fmt.Errorf("security: memory integrity violation")
 		}
 	}
 
-	// 检查环境变量
-	envVars := []string{
-		"VBOX_MSI_INSTALL_PATH",
-		"VBOX_INSTALL_PATH",
-	}
-
-	for _, envVar := range envVars {
-		if os.Getenv(envVar) != "" {
-			return true
+	// 关键检查
+	if level >= SecurityLevelCritical {
+		if count > 0 {
+			return fmt.Errorf("security: multiple security violations detected")
 		}
-	}
-
-	// Linux特定检查
-	if runtime.GOOS == "linux" {
-		// 检查/proc/cpuinfo
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "vbox") {
-				return true
-			}
-		}
-
-		// 检查/proc/modules
-		if data, err := os.ReadFile("/proc/modules"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "vbox") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func (sm *SecurityManager) checkHyperVArtifacts() bool {
-	// Hyper-V检测特征
-	hypervIndicators := []string{
-		"Microsoft Corporation",
-		"Hyper-V",
-		"Virtual Machine",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range hypervIndicators {
-		if strings.Contains(hostname, indicator) {
-			return true
-		}
-	}
-
-	// Windows特定检查
-	if runtime.GOOS == "windows" {
-		// 检查Hyper-V服务
-		// 这里使用简化实现
-		return false
-	}
-
-	// Linux下检查虚拟化标志
-	if runtime.GOOS == "linux" {
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			cpuinfo := strings.ToLower(string(data))
-			if strings.Contains(cpuinfo, "hypervisor") ||
-				strings.Contains(cpuinfo, "microsoft") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func (sm *SecurityManager) checkQEMUArtifacts() bool {
-	// QEMU检测特征
-	qemuIndicators := []string{
-		"QEMU",
-		"qemu",
-		"Bochs",
-		"bochs",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range qemuIndicators {
-		if strings.Contains(strings.ToLower(hostname), strings.ToLower(indicator)) {
-			return true
-		}
-	}
-
-	// Linux特定检查
-	if runtime.GOOS == "linux" {
-		// 检查/proc/cpuinfo
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			cpuinfo := strings.ToLower(string(data))
-			for _, indicator := range qemuIndicators {
-				if strings.Contains(cpuinfo, strings.ToLower(indicator)) {
-					return true
-				}
-			}
-		}
-
-		// 检查设备管理器
-		if data, err := os.ReadFile("/proc/scsi/scsi"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "qemu") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// 沙箱检测辅助函数
-func (sm *SecurityManager) detectCuckooSandbox() bool {
-	// Cuckoo Sandbox检测特征
-	cuckooIndicators := []string{
-		"cuckoo",
-		"sandbox",
-		"malware",
-		"analysis",
-		"sample",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range cuckooIndicators {
-		if strings.Contains(strings.ToLower(hostname), indicator) {
-			return true
-		}
-	}
-
-	// 检查用户名
-	if user := os.Getenv("USER"); user != "" {
-		for _, indicator := range cuckooIndicators {
-			if strings.Contains(strings.ToLower(user), indicator) {
-				return true
-			}
-		}
-	}
-
-	// Windows特定检查
-	if runtime.GOOS == "windows" {
-		// 检查Cuckoo特有的文件和目录
-		cuckooArtifacts := []string{
-			"C:\\cuckoo",
-			"C:\\Python27\\Lib\\site-packages\\cuckoo",
-			"C:\\analysis",
-		}
-
-		for _, artifact := range cuckooArtifacts {
-			if _, err := os.Stat(artifact); err == nil {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func (sm *SecurityManager) detectJoeSandbox() bool {
-	// Joe Sandbox检测特征
-	joeIndicators := []string{
-		"joe",
-		"joesandbox",
-		"analysis",
-		"sample",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range joeIndicators {
-		if strings.Contains(strings.ToLower(hostname), indicator) {
-			return true
-		}
-	}
-
-	// 检查环境变量
-	envVars := []string{
-		"JOE_SANDBOX",
-		"ANALYSIS",
-	}
-
-	for _, envVar := range envVars {
-		if os.Getenv(envVar) != "" {
-			return true
-		}
-	}
-
-	// 检查文件系统特征
-	if runtime.GOOS == "windows" {
-		joeArtifacts := []string{
-			"C:\\joesandbox",
-			"C:\\analysis",
-		}
-
-		for _, artifact := range joeArtifacts {
-			if _, err := os.Stat(artifact); err == nil {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func (sm *SecurityManager) detectAnubis() bool {
-	// Anubis沙箱检测特征
-	anubisIndicators := []string{
-		"anubis",
-		"sandbox",
-		"malware",
-		"sample",
-	}
-
-	// 检查主机名
-	hostname, _ := os.Hostname()
-	for _, indicator := range anubisIndicators {
-		if strings.Contains(strings.ToLower(hostname), indicator) {
-			return true
-		}
-	}
-
-	// 检查用户名和环境
-	if user := os.Getenv("USER"); user != "" {
-		for _, indicator := range anubisIndicators {
-			if strings.Contains(strings.ToLower(user), indicator) {
-				return true
-			}
-		}
-	}
-
-	// 检查系统特征
-	// Anubis通常运行在Linux环境中
-	if runtime.GOOS == "linux" {
-		// 检查进程列表中是否有可疑进程
-		if data, err := os.ReadFile("/proc/version"); err == nil {
-			version := strings.ToLower(string(data))
-			for _, indicator := range anubisIndicators {
-				if strings.Contains(version, indicator) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// 注入检测辅助函数
-func (sm *SecurityManager) detectDLLInjection() bool {
-	// DLL注入检测（主要针对Windows）
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 检查异常的内存映射
-	// 这里使用简化的检测方法：
-	// 检查程序的内存使用情况是否异常
-
-	// 记录开始的内存状态
-	var m1, m2 runtime.MemStats
-	runtime.ReadMemStats(&m1)
-
-	// 稍作等待
-	time.Sleep(time.Millisecond * 10)
-
-	// 再次检查内存
-	runtime.ReadMemStats(&m2)
-
-	// 如果内存使用突然大幅增加，可能有注入
-	memIncrease := m2.Alloc - m1.Alloc
-
-	// 阈值设定为1MB，超过这个值可能有问题
-	return memIncrease > 1024*1024
-}
-
-func (sm *SecurityManager) detectCodeInjection() bool {
-	// 代码注入检测
-	// 检查进程内存中是否有异常的可执行区域
-
-	// 方法：检查堆栈和堆的状态
-	// 代码注入通常会改变这些区域的特性
-
-	// 简化实现：检查goroutine数量是否异常
-	numGoroutines := runtime.NumGoroutine()
-
-	// 对于证书管理系统，正常情况下不应该有太多 goroutine
-	// 如果数量异常多，可能有恶意代码注入
-	return numGoroutines > 100
-}
-
-// 内存保护辅助函数
-func (sm *SecurityManager) encryptCriticalMemory() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// 加密关键内存区域
-	key := md5.Sum([]byte("cert-security-key"))
-	for i := range sm.memProtect {
-		sm.memProtect[i] ^= key[i%len(key)]
-	}
-}
-
-func (sm *SecurityManager) setMemoryPermissions() error {
-	// 设置内存页面权限（平台特定实现通过构建标签自动选择）
-	return sm.mprotect()
-}
-
-func (sm *SecurityManager) encryptSensitiveData(key []byte) error {
-	// 加密敏感数据
-	if len(key) < 32 {
-		return fmt.Errorf("encryption key must be at least 32 bytes")
-	}
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// 加密关键内存区域
-	for i := range sm.memProtect {
-		sm.memProtect[i] ^= key[i%len(key)]
-	}
-
-	// 加密校验和
-	for i := range sm.checksum {
-		sm.checksum[i] ^= key[(i+16)%len(key)]
 	}
 
 	return nil
 }
 
-// === 集成函数 ===
+// Close 关闭安全管理器
+func (sm *SecurityManager) Close() {
+	close(sm.done)
+	sm.wg.Wait()
+}
+
+// GetDebuggerCount 获取调试器检测次数
+func (sm *SecurityManager) GetDebuggerCount() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.debuggerCount
+}
+
+// StopSecurityChecks 停止后台安全检查
+//
+// 注意：
+// - 此方法应可重复调用且不应 panic（与 Close 行为一致但更语义化）
+// - 会等待后台 goroutine 退出，避免测试/调用方泄漏 goroutine
+func (sm *SecurityManager) StopSecurityChecks() {
+	sm.mu.Lock()
+	// 标记为未激活，供测试与上层逻辑判断
+	sm.antiDebugActive = false
+
+	// 关闭 done 可能会被重复调用；用 recover 保证幂等
+	// 这里不做额外状态字段，保持结构简单（KISS）
+	defer func() {
+		_ = recover()
+	}()
+	close(sm.done)
+	sm.mu.Unlock()
+
+	sm.wg.Wait()
+}
+
+// DetectVirtualMachine 检测虚拟机环境
+//
+// 设计原则：
+// - 只做“可能性”检测：尽量避免误报导致不可用
+// - 不引入外部依赖；尽量使用系统可读取的只读信息
+// - 平台差异大：使用 runtime.GOOS 分支实现
+func (sm *SecurityManager) DetectVirtualMachine() bool {
+	// 未启用安全功能时不做检测，避免无谓成本与误判
+	sm.mu.RLock()
+	level := sm.level
+	sm.mu.RUnlock()
+	if level == SecurityLevelDisabled {
+		return false
+	}
+
+	switch runtime.GOOS {
+	case "linux":
+		// Linux 常见虚拟化特征：
+		// 1) DMI/SMBIOS 产品信息包含 VMware/QEMU/VirtualBox/Hyper-V 等关键字
+		// 2) /proc/cpuinfo 含 hypervisor 标志
+		// 说明：容器环境通常不会触发这些特征
+		return detectVirtualMachineLinux()
+	case "windows":
+		// Windows：
+		// - 通过环境变量/系统信息推断（简化实现，避免调用复杂 WinAPI）
+		return detectVirtualMachineWindows()
+	case "darwin":
+		// macOS：
+		// - 读取系统版本/硬件信息需要 sysctl/ioreg；此处保持保守，避免误报
+		return detectVirtualMachineDarwin()
+	default:
+		return false
+	}
+}
+
+// DetectSandbox 检测沙箱环境
+//
+// 这里的“沙箱”更偏向运行限制环境，例如：
+// - 容器/受限 namespace（Linux）
+// - macOS App Sandbox（需要 entitlements/系统 API，难以在纯 Go 通用检测）
+// - Windows 的受限令牌/Job Object（同样需要 WinAPI）
+//
+// 因此实现策略为“低误报”的启发式检测：只在证据较强时返回 true。
+func (sm *SecurityManager) DetectSandbox() bool {
+	sm.mu.RLock()
+	level := sm.level
+	sm.mu.RUnlock()
+	if level == SecurityLevelDisabled {
+		return false
+	}
+
+	switch runtime.GOOS {
+	case "linux":
+		return detectSandboxLinux()
+	case "windows":
+		return detectSandboxWindows()
+	case "darwin":
+		return detectSandboxDarwin()
+	default:
+		return false
+	}
+}
+
+// === 内存保护功能 ===
+
+// protectMemory 保护关键内存区域（SecurityManager 方法）
+func (sm *SecurityManager) protectMemory() error {
+	// 调用平台特定的 mprotect
+	return sm.mprotect()
+}
+
+// === 平台特定环境检测实现 ===
+
+func containsAnyLower(s string, needles []string) bool {
+	s = strings.ToLower(s)
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func detectVirtualMachineLinux() bool {
+	// /proc/cpuinfo 的 hypervisor flag 是最常见且便宜的信号
+	if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+		if containsAnyLower(string(data), []string{"hypervisor"}) {
+			return true
+		}
+	}
+
+	// DMI/SMBIOS 信息：对主流虚拟化厂商有效
+	dmiCandidates := []string{
+		"/sys/class/dmi/id/product_name",
+		"/sys/class/dmi/id/sys_vendor",
+		"/sys/class/dmi/id/board_vendor",
+		"/sys/class/dmi/id/bios_vendor",
+	}
+	vmNeedles := []string{
+		"vmware",
+		"virtualbox",
+		"vbox",
+		"qemu",
+		"kvm",
+		"bochs",
+		"xen",
+		"microsoft corporation", // Hyper-V 常见 vendor
+		"hyper-v",
+		"parallels",
+	}
+	for _, path := range dmiCandidates {
+		if data, err := os.ReadFile(path); err == nil {
+			if containsAnyLower(string(data), vmNeedles) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func detectVirtualMachineWindows() bool {
+	// 简化启发式：读取常见环境变量/系统信息痕迹
+	// 说明：更可靠的方式需要调用 WMI/WinAPI，这里保持轻量且不引入额外复杂度。
+	env := strings.ToLower(os.Getenv("PROCESSOR_IDENTIFIER") + " " + os.Getenv("PROCESSOR_REVISION"))
+	return containsAnyLower(env, []string{"virtual", "vmware", "vbox", "qemu", "xen", "hyper-v"})
+}
+
+func detectVirtualMachineDarwin() bool {
+	// macOS 的通用 VM 检测往往依赖 sysctl("machdep.cpu.features") 或 ioreg；
+	// 为避免误报，这里默认返回 false。
+	return false
+}
+
+func detectSandboxLinux() bool {
+	// Linux “沙箱/容器”启发式：
+	// - cgroup 中出现 docker/kubepods/containerd 等路径
+	// - /proc/1/sched 或 /proc/1/cmdline 表现为 init 被替换（强信号）
+	//
+	// 说明：容器不等于恶意沙箱，但在安全策略中通常需要区别对待。
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		if containsAnyLower(string(data), []string{"docker", "kubepods", "containerd", "lxc"}) {
+			return true
+		}
+	}
+	if data, err := os.ReadFile("/proc/1/cmdline"); err == nil {
+		// cmdline 以 \0 分隔，直接做包含判断即可
+		if containsAnyLower(string(data), []string{"docker", "containerd", "kubepods", "lxc"}) {
+			return true
+		}
+	}
+
+	// 环境变量也是弱信号：仅作为补充（避免误报，不单独触发 true）
+	env := strings.ToLower(os.Getenv("container"))
+	return env != ""
+}
+
+func detectSandboxWindows() bool {
+	// Windows 沙箱/受限环境检测通常依赖 WinAPI（令牌、Job、AppContainer）。
+	// 这里用保守策略：默认 false，避免误报。
+	return false
+}
+
+func detectSandboxDarwin() bool {
+	// macOS App Sandbox 检测同样需要系统 API/entitlements；
+	// 这里保守返回 false。
+	return false
+}
+
+// === 混淆功能 ===
+// （当前未在生产流程使用，移除以减少未使用代码）
+
+// === 完整性检查 ===
+// （当前未在生产流程使用，移除以减少未使用代码）
+
+// === 安全相关的辅助函数 ===
 
 // InitSecurityManager 初始化安全管理器并集成到授权管理器
 func (a *Authorizer) InitSecurityManager() *SecurityManager {
@@ -1075,72 +714,32 @@ func (a *Authorizer) PerformSecurityCheck() error {
 	}
 
 	// 根据配置确定安全检查级别
-	level := a.getSecurityLevel()
+	level := a.GetSecurityLevel()
 	if level == SecurityLevelDisabled {
 		return nil // 安全检查被完全禁用
 	}
 
-	// 创建临时安全管理器进行检查
-	sm := NewSecurityManager(level)
-	defer sm.StopSecurityChecks()
-
-	// 根据安全级别执行不同程度的检查
-	switch level {
-	case SecurityLevelBasic:
-		// 基础级别：只检查简单调试器
+	// 基础检查：调试器检测
+	if level >= SecurityLevelBasic {
 		if checkDebugger() {
-			return NewSecurityError(ErrDebuggerDetected,
-				"debugging environment detected", nil).
-				WithSuggestion("请在非调试环境下运行程序")
+			return fmt.Errorf("security: debugger detected")
 		}
+	}
 
-	case SecurityLevelAdvanced:
-		// 高级级别：完整反逆向检测
+	// 高级检查：完整反逆向保护
+	if level >= SecurityLevelAdvanced {
 		if checkAdvancedDebugger() {
-			return NewSecurityError(ErrDebuggerDetected,
-				"advanced debugging environment detected", nil).
-				WithSuggestion("请在非调试环境下运行程序")
-		}
-
-		// 检查虚拟机环境
-		if sm.DetectVirtualMachine() {
-			sm.logSecurityEvent("Virtual machine environment detected")
-		}
-
-		// 检查沙箱环境
-		if sm.DetectSandbox() {
-			return NewSecurityError(ErrUnauthorizedAccess,
-				"sandbox environment detected", nil).
-				WithSuggestion("程序不允许在沙箱环境中运行")
-		}
-
-	case SecurityLevelCritical:
-		// 关键级别：最严格的检查
-		if checkAdvancedDebugger() {
-			return NewSecurityError(ErrDebuggerDetected,
-				"critical security violation - debugging detected", nil).
-				WithSuggestion("程序在关键模式下不允许调试")
-		}
-
-		if sm.DetectVirtualMachine() || sm.DetectSandbox() {
-			return NewSecurityError(ErrUnauthorizedAccess,
-				"critical security violation - virtual environment detected", nil).
-				WithSuggestion("程序在关键模式下只能在物理机运行")
-		}
-
-		// 执行进程保护检查
-		if err := sm.ProtectProcess(); err != nil {
-			return err
+			return fmt.Errorf("security: advanced debugging detected")
 		}
 	}
 
 	return nil
 }
 
-// getSecurityLevel 根据配置获取安全级别
-func (a *Authorizer) getSecurityLevel() int {
+// GetSecurityLevel 根据配置获取安全级别
+func (a *Authorizer) GetSecurityLevel() int {
 	// 如果明确设置了安全级别，直接使用
-	if level, ok := a.config.Security.GetSecurityLevel(); ok {
+	if level, ok := a.config.Security.EffectiveSecurityLevel(); ok {
 		return level
 	}
 
@@ -1149,13 +748,8 @@ func (a *Authorizer) getSecurityLevel() int {
 		return SecurityLevelDisabled
 	}
 
-	// 根据配置组合推断级别
 	if a.config.Security.RequireHardwareBinding {
 		return SecurityLevelCritical
-	}
-
-	if a.config.Security.EnableTimeValidation {
-		return SecurityLevelAdvanced
 	}
 
 	return SecurityLevelBasic
@@ -1170,4 +764,200 @@ func (a *Authorizer) ValidateWithSecurity(certPEM []byte, machineID string) erro
 
 	// 然后执行正常的证书验证
 	return a.ValidateCert(certPEM, machineID)
+}
+
+// StopSecurityChecks 停止安全检查
+
+// VerifyIntegrity 验证内存完整性（简化实现）
+func (sm *SecurityManager) VerifyIntegrity() error {
+	if !sm.verifyMemoryIntegrity() {
+		return fmt.Errorf("memory integrity check failed")
+	}
+	return nil
+}
+
+// clearSensitiveData 清除敏感数据
+func (sm *SecurityManager) clearSensitiveData() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	for i := range sm.memProtect {
+		sm.memProtect[i] = 0
+	}
+	for i := range sm.checksum {
+		sm.checksum[i] = 0
+	}
+}
+
+// encryptSensitiveData 加密敏感数据
+func (sm *SecurityManager) encryptSensitiveData(key []byte) error {
+	if len(key) < 16 {
+		return fmt.Errorf("key too short: minimum 16 bytes required")
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	// 简化实现：使用 XOR 加密
+	for i := range sm.memProtect {
+		sm.memProtect[i] ^= key[i%len(key)]
+	}
+	return nil
+}
+
+// ProtectProcess 保护进程（简化实现）
+func (sm *SecurityManager) ProtectProcess() error {
+	if sm.level >= SecurityLevelAdvanced {
+		return sm.protectMemory()
+	}
+	return nil
+}
+
+// getCriticalMemoryRegions 获取关键内存区域
+func (sm *SecurityManager) getCriticalMemoryRegions() []byte {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	data := make([]byte, len(sm.memProtect))
+	copy(data, sm.memProtect)
+	return data
+}
+
+// === 时间戳防回滚功能 ===
+
+// MonotonicTime 单调时间管理器
+//
+// 用于检测系统时间回滚攻击：
+// - 持久化最后已知时间戳
+// - 启动时检查时间一致性
+// - 防止通过修改系统时间绕过有效期检查
+type MonotonicTime struct {
+	mu              sync.RWMutex
+	lastKnownTime   time.Time
+	persistencePath string
+	maxClockSkew    time.Duration // 允许的最大时钟偏差
+}
+
+// NewMonotonicTime 创建单调时间管理器
+func NewMonotonicTime(persistencePath string, maxClockSkew time.Duration) (*MonotonicTime, error) {
+	mt := &MonotonicTime{
+		persistencePath: persistencePath,
+		maxClockSkew:    maxClockSkew,
+	}
+
+	// 尝试加载上次的时间戳
+	if err := mt.loadLastKnownTime(); err != nil {
+		// 首次运行，记录当前时间
+		mt.lastKnownTime = time.Now()
+		if err := mt.saveLastKnownTime(); err != nil {
+			return nil, fmt.Errorf("failed to initialize monotonic time: %w", err)
+		}
+	}
+
+	return mt, nil
+}
+
+// CheckTimeRollback 检查时间回滚
+//
+// 返回错误表示检测到时间回滚
+func (mt *MonotonicTime) CheckTimeRollback() error {
+	mt.mu.RLock()
+	lastTime := mt.lastKnownTime
+	mt.mu.RUnlock()
+
+	now := time.Now()
+
+	// 检查当前时间是否早于上次记录的时间
+	if now.Before(lastTime) {
+		// 允许一定的时钟偏差（网络时间同步可能导致小幅回退）
+		timeDiff := lastTime.Sub(now)
+		if timeDiff > mt.maxClockSkew {
+			return fmt.Errorf("time rollback detected: current=%s, last=%s, diff=%v",
+				now.Format(time.RFC3339),
+				lastTime.Format(time.RFC3339),
+				timeDiff)
+		}
+	}
+
+	// 更新最后已知时间
+	mt.mu.Lock()
+	mt.lastKnownTime = now
+	mt.mu.Unlock()
+
+	// 持久化新时间
+	if err := mt.saveLastKnownTime(); err != nil {
+		// 持久化失败不影响程序运行，但记录警告
+		return nil
+	}
+
+	return nil
+}
+
+// loadLastKnownTime 从文件加载上次时间
+func (mt *MonotonicTime) loadLastKnownTime() error {
+	data, err := os.ReadFile(mt.persistencePath)
+	if err != nil {
+		return err
+	}
+
+	var lastTime time.Time
+	if err := lastTime.UnmarshalText(data); err != nil {
+		return fmt.Errorf("failed to parse timestamp: %w", err)
+	}
+
+	mt.mu.Lock()
+	mt.lastKnownTime = lastTime
+	mt.mu.Unlock()
+
+	return nil
+}
+
+// saveLastKnownTime 保存当前时间到文件
+func (mt *MonotonicTime) saveLastKnownTime() error {
+	mt.mu.RLock()
+	lastTime := mt.lastKnownTime
+	mt.mu.RUnlock()
+
+	data, err := lastTime.MarshalText()
+	if err != nil {
+		return err
+	}
+
+	// 确保目录存在
+	dir := filepath.Dir(mt.persistencePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
+	// 写入文件（仅所有者可读写）
+	return os.WriteFile(mt.persistencePath, data, 0o600)
+}
+
+// GetLastKnownTime 获取上次记录的时间
+func (mt *MonotonicTime) GetLastKnownTime() time.Time {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.lastKnownTime
+}
+
+// ForceUpdate 强制更新时间戳（谨慎使用）
+//
+// 注意：此方法应仅在确认时间正确的情况下使用，
+// 例如从可信时间服务器同步后
+func (mt *MonotonicTime) ForceUpdate(newTime time.Time) error {
+	mt.mu.Lock()
+	mt.lastKnownTime = newTime
+	mt.mu.Unlock()
+
+	return mt.saveLastKnownTime()
+}
+
+// Reset 重置时间戳（用于测试或迁移场景）
+func (mt *MonotonicTime) Reset() error {
+	mt.mu.Lock()
+	mt.lastKnownTime = time.Now()
+	mt.mu.Unlock()
+
+	// 删除持久化文件
+	if err := os.Remove(mt.persistencePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	return mt.saveLastKnownTime()
 }

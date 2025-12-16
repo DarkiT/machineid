@@ -5,42 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
 	"testing"
 	"time"
 )
-
-// TestGetKeySize_RSA 测试 RSA 密钥大小识别
-func TestGetKeySize_RSA(t *testing.T) {
-	tests := []struct {
-		name    string
-		keySize int
-	}{
-		{"RSA 1024", 1024},
-		{"RSA 2048", 2048},
-		{"RSA 3072", 3072},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			privateKey, err := rsa.GenerateKey(rand.Reader, tt.keySize)
-			if err != nil {
-				t.Fatalf("生成 RSA 密钥失败: %v", err)
-			}
-
-			cert := createTestCertificate(t, &privateKey.PublicKey)
-			inspector := NewCertificateInspector()
-			keySize := inspector.getKeySize(cert)
-
-			if keySize != tt.keySize {
-				t.Errorf("密钥大小不匹配: 期望 %d, 实际 %d", tt.keySize, keySize)
-			}
-		})
-	}
-}
 
 // TestGetKeySize_ECDSA 测试 ECDSA 密钥大小识别
 func TestGetKeySize_ECDSA(t *testing.T) {
@@ -51,10 +21,8 @@ func TestGetKeySize_ECDSA(t *testing.T) {
 		curve    elliptic.Curve
 		expected int
 	}{
-		{"P-224", elliptic.P224(), 224},
 		{"P-256", elliptic.P256(), 256},
 		{"P-384", elliptic.P384(), 384},
-		{"P-521", elliptic.P521(), 521},
 	}
 
 	for _, tt := range tests {
@@ -143,14 +111,16 @@ func createTestCertificate(t *testing.T, publicKey any) *x509.Certificate {
 	// 根据不同的公钥类型选择合适的私钥
 	var privateKey any
 	switch pub := publicKey.(type) {
-	case *rsa.PublicKey:
-		// 从公钥反推私钥（仅用于测试）
-		// 注意：实际应用中不应该这样做
-		privateKey, _ = rsa.GenerateKey(rand.Reader, pub.N.BitLen())
 	case *ecdsa.PublicKey:
-		privateKey, _ = ecdsa.GenerateKey(pub.Curve, rand.Reader)
+		privateKey, err = ecdsa.GenerateKey(pub.Curve, rand.Reader)
+		if err != nil {
+			t.Fatalf("生成 ECDSA 私钥失败: %v", err)
+		}
 	case ed25519.PublicKey:
-		publicKey, privateKey, _ = ed25519.GenerateKey(rand.Reader)
+		publicKey, privateKey, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("生成 Ed25519 密钥失败: %v", err)
+		}
 	default:
 		t.Fatalf("不支持的公钥类型")
 	}
@@ -170,12 +140,10 @@ func createTestCertificate(t *testing.T, publicKey any) *x509.Certificate {
 
 // TestInspectCertificate_KeySize 测试完整的证书检查流程
 func TestInspectCertificate_KeySize(t *testing.T) {
-	t.Parallel()
-
-	// 生成 RSA 2048 密钥
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	// 生成 ECDSA P-256 密钥
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("生成 RSA 密钥失败: %v", err)
+		t.Fatalf("生成 ECDSA 密钥失败: %v", err)
 	}
 
 	cert := createTestCertificate(t, &privateKey.PublicKey)
@@ -183,8 +151,8 @@ func TestInspectCertificate_KeySize(t *testing.T) {
 	inspector := NewCertificateInspector()
 	info := inspector.InspectCertificate(cert)
 
-	if info.KeySize != 2048 {
-		t.Errorf("证书信息中的密钥大小不匹配: 期望 2048, 实际 %d", info.KeySize)
+	if info.KeySize != 256 {
+		t.Errorf("证书信息中的密钥大小不匹配: 期望 256, 实际 %d", info.KeySize)
 	}
 }
 

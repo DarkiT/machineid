@@ -1,8 +1,8 @@
 package cert
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"sync"
@@ -25,24 +25,28 @@ func ensureTestCA() error {
 			Province:     "GD",
 			Locality:     "SZ",
 			ValidDays:    3650,
-			KeySize:      1024,
 		}
 
-		priv, err := rsa.GenerateKey(rand.Reader, info.KeySize)
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			testCAErr = err
 			return
 		}
 
-		tmpl := createCertificateTemplate(info, priv)
-		certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+		tmpl := createCertificateTemplate(info)
+		certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
 		if err != nil {
 			testCAErr = err
 			return
 		}
 
 		testCACert = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-		testCAKey = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+		keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			testCAErr = err
+			return
+		}
+		testCAKey = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	})
 	return testCAErr
 }

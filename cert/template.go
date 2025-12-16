@@ -52,7 +52,7 @@ func (tm *TemplateManager) loadDefaultTemplates() {
 		KeyUsages:      []x509.KeyUsage{x509.KeyUsageDigitalSignature},
 		ExtKeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		SecurityLevel:  TemplateSecurityLevelMedium,
-		RequiredFields: []string{"MachineID", "CompanyName", "Version"},
+		RequiredFields: []string{"MachineID", "CompanyName", "MinClientVersion"},
 		OptionalFields: []string{"ContactPerson", "ContactEmail", "Department"},
 	}
 
@@ -64,7 +64,7 @@ func (tm *TemplateManager) loadDefaultTemplates() {
 		KeyUsages:      []x509.KeyUsage{x509.KeyUsageDigitalSignature, x509.KeyUsageKeyEncipherment},
 		ExtKeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		SecurityLevel:  TemplateSecurityLevelHigh,
-		RequiredFields: []string{"MachineID", "CompanyName", "Version", "ContactPerson", "ContactEmail"},
+		RequiredFields: []string{"MachineID", "CompanyName", "MinClientVersion", "ContactPerson", "ContactEmail"},
 		OptionalFields: []string{"Department", "ContactPhone"},
 	}
 
@@ -77,7 +77,7 @@ func (tm *TemplateManager) loadDefaultTemplates() {
 		ExtKeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		SecurityLevel:  TemplateSecurityLevelLow,
 		RequiredFields: []string{"MachineID", "CompanyName"},
-		OptionalFields: []string{"ContactEmail", "Version"},
+		OptionalFields: []string{"ContactEmail", "MinClientVersion"},
 	}
 
 	// 企业级证书模板
@@ -97,14 +97,14 @@ func (tm *TemplateManager) loadDefaultTemplates() {
 		SecurityLevel: TemplateSecurityLevelCritical,
 		RequiredFields: []string{
 			"MachineID", "CompanyName", "Department", "ContactPerson",
-			"ContactEmail", "ContactPhone", "Version", "Country", "Province", "City",
+			"ContactEmail", "ContactPhone", "MinClientVersion", "Country", "Province", "City",
 		},
 		OptionalFields: []string{"Address"},
 	}
 }
 
-// GetTemplate 获取模板
-func (tm *TemplateManager) GetTemplate(name string) (*CertTemplate, error) {
+// Template 获取模板
+func (tm *TemplateManager) Template(name string) (*CertTemplate, error) {
 	template, exists := tm.templates[name]
 	if !exists {
 		return nil, NewValidationError(ErrMissingRequiredField,
@@ -142,7 +142,7 @@ func (tm *TemplateManager) ListTemplates() map[string]*CertTemplate {
 
 // ValidateRequestWithTemplate 使用模板验证请求
 func (tm *TemplateManager) ValidateRequestWithTemplate(req *ClientCertRequest, templateName string) error {
-	template, err := tm.GetTemplate(templateName)
+	template, err := tm.Template(templateName)
 	if err != nil {
 		return err
 	}
@@ -200,10 +200,10 @@ func (tm *TemplateManager) validateRequiredField(req *ClientCertRequest, field s
 			return NewValidationError(ErrMissingRequiredField,
 				"contact phone is required", nil)
 		}
-	case "Version":
-		if req.Technical == nil || req.Technical.Version == "" {
+	case "MinClientVersion":
+		if req.Technical == nil || req.Technical.MinClientVersion == "" {
 			return NewValidationError(ErrMissingRequiredField,
-				"version is required", nil)
+				"minimum client version is required", nil)
 		}
 	case "Country":
 		if req.Company == nil || req.Company.Address == nil || req.Company.Address.Country == "" {
@@ -240,9 +240,9 @@ func (tm *TemplateManager) validateSecurityLevel(req *ClientCertRequest, level T
 		fallthrough
 	case TemplateSecurityLevelHigh:
 		// 高级别需要版本信息
-		if req.Technical == nil || req.Technical.Version == "" {
+		if req.Technical == nil || req.Technical.MinClientVersion == "" {
 			return NewSecurityError(ErrUnauthorizedAccess,
-				"high security level requires version information", nil)
+				"high security level requires minimum client version information", nil)
 		}
 		fallthrough
 	case TemplateSecurityLevelMedium:
@@ -264,7 +264,7 @@ func (tm *TemplateManager) validateSecurityLevel(req *ClientCertRequest, level T
 
 // ApplyTemplate 应用模板到请求
 func (tm *TemplateManager) ApplyTemplate(req *ClientCertRequest, templateName string) error {
-	template, err := tm.GetTemplate(templateName)
+	template, err := tm.Template(templateName)
 	if err != nil {
 		return err
 	}

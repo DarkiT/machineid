@@ -1,9 +1,8 @@
 package cert
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -22,95 +21,25 @@ const defaultEnterpriseID = 62996
 
 // 定义包级变量
 var (
-	// currentCertVersion 当前证书格式版本
-	currentCertVersion = "1.0.0"
+	// defaultCertVersion 默认证书格式版本
+	defaultCertVersion = "1.0.0"
 
-	// 默认的内置CA证书和私钥
 	defaultCACert = []byte(`-----BEGIN CERTIFICATE-----
-MIIFoDCCA4igAwIBAgIIGBxYISs1axgwDQYJKoZIhvcNAQELBQAwbTELMAkGA1UE
-BhMCQ04xEjAQBgNVBAgTCUd1YW5nZG9uZzESMBAGA1UEBxMJR3Vhbmd6aG91MRgw
-FgYDVQQKDA/lrZDor7Tlt6XkvZzlrqQxHDAaBgNVBAMTE1pTdHVkaW8gU29mdHdh
-cmUgQ0EwIBcNMjUwMTIwMDgwNzM1WhgPMjEyNDEyMjcwODA3MzVaMG0xCzAJBgNV
-BAYTAkNOMRIwEAYDVQQIEwlHdWFuZ2RvbmcxEjAQBgNVBAcTCUd1YW5nemhvdTEY
-MBYGA1UECgwP5a2Q6K+05bel5L2c5a6kMRwwGgYDVQQDExNaU3R1ZGlvIFNvZnR3
-YXJlIENBMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAw17CSfhk2REC
-1b5A0nmH04ho+/pyEIFB1u5DVISQWOIRWNquInIjb74XqLZIjRUptnp+C+KnN0vr
-7RspSvrN3Y68l8quG9AK83WaiG6iifcutopYKQQeJRcmu2e5iC0OWult/nM6hb5T
-0vR+FOyDNyz+AIcQpr9URCm772Xr59lp86W5sZxv+Uqxx76YUQVyEUPHJxwkLrDR
-Mx2tP8uNFHun4UW5V8DWk4itLKc7oJMcnnTX0pEumRyYyA++gBW615g3h17fBNuU
-MR8cos1JUremunoTUFdkZNYTzPSVN7Oq2S8W6xZFwRrYCYCpW150TI1BAhjBN1vj
-WtkeGFWEAd4uUTjyr6fYwTfx7PKT/Z5iXAiIyXzMTukuiMjdyRCi/BVCIsMx7GJh
-yfYEyjYdZgOHiMV/+hL5K4lmsCtHzEhkNOOmNhVlYaDpIhIZE/AZBvhYdHjUcc8G
-JnxJMM5/eHHn4W0185BuXVy4e+3tRWnk2UH7vYhydNyy0U8NwIk01GIJZSMJFgbP
-kHvYXtSsVSIh69YuY22hsVxA50EDkser4//YZu/qn+y1eB+jCSc++Ie+6EuWiSlY
-3wkQainoFFecXtyVCs8mFW+/k7Nd48/j0tBM18RJ94al7uVX2JcXIPPpAUbXe7GF
-zIAudbqrIuq9hTS573Y9CsiwhAw+dncCAwEAAaNCMEAwDgYDVR0PAQH/BAQDAgGG
-MA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFBS9Rp64gpZgceG0imEJLvXAvkmQ
-MA0GCSqGSIb3DQEBCwUAA4ICAQCSLre1PdvmEm/yhKI4gK6Wo2bZZspSxaSjsdLN
-026XnIBw5WFDpXdAWXO5IgKbPTJeAxxfK3ochEmPmzhUJUOj+HGLyHAW+yUBkQJ8
-b8G55kuaaXgvw6l8BdRTvJRoTdVm+h5GNxnWypXw3dUTvvzhbSwMvUlMQJRYql1f
-SID/y/6p3cy/EaoMJijFrfOM+6eRYZGT0OpQywqnYzAm6MCI+xSzu7veB09c9cg1
-kwZ7MbMuLMFSdXQ2mM/OZUSxeBk/228rMaUADpnTrKqGmLYLH5348REj3R2GbYuN
-we2fsH4/ZG7bM3ngyUjcLcxO1U1XVste7cCv9jSo7QBLcDy3/fHeJSxenpT4OmJJ
-75ZhLsJsigfurgJUNsU+cJEfreZka8wI5YtGenSlYkY0SIXQbA3l92W/M67P+0Qi
-lC+lLSkKOU773FuEZSgV+APDE43Okwx7lnYFFdcof7dIV5eW2Keb3EYTeXHcr5lJ
-MGKxbJkFo32PZ67wKzvGktPPPmAuyLeHjj0xni8meNsL0qhIahuhqIxtKuZhUcUR
-9FMfJAFX4bfDPEa5NgQtHdIxMuS8k0z3CRigjy2rxGb1PkGtsRIuXFC+hebAXNvY
-zMYYzQteh2YszCfHi8O9jKMdiTpb/PNd1ydB9BT3SAGWkLKkfJlbp16KOodB9cnW
-cDXyGQ==
+MIIBzjCCAYCgAwIBAgIIGIG9ZoHvfOgwBQYDK2VwMGoxCzAJBgNVBAYTAkNOMRIw
+EAYDVQQIEwlHdWFuZ2RvbmcxEjAQBgNVBAcTCUd1YW5nemhvdTEYMBYGA1UECgwP
+5a2Q6K+05bel5L2c5a6kMRkwFwYDVQQDExBaU3R1ZGlvIFNvZnR3YXJlMCAXDTI1
+MTIxNjE1NTkzNloYDzIxMjUxMTIyMTU1OTM2WjBqMQswCQYDVQQGEwJDTjESMBAG
+A1UECBMJR3Vhbmdkb25nMRIwEAYDVQQHEwlHdWFuZ3pob3UxGDAWBgNVBAoMD+Wt
+kOivtOW3peS9nOWupDEZMBcGA1UEAxMQWlN0dWRpbyBTb2Z0d2FyZTAqMAUGAytl
+cAMhANd2vylnZ+HNmrtc9BiJzMqf06uuLFALFnJd9omGE3Vno0IwQDAOBgNVHQ8B
+Af8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUvMcU5fbpAYu7i2LZ
+SDdY/KP1xhwwBQYDK2VwA0EAOb/HhW7RntRIdqH8kneJRV0wnhsSWKMdiY2cDEEe
+FNhRWm+Z+MnJgYdbwDJ5nAI8C5L6hUXVPpn9occfyBcjCQ==
 -----END CERTIFICATE-----`)
 
-	defaultCAKey = []byte(`-----BEGIN RSA PRIVATE KEY-----
-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
------END RSA PRIVATE KEY-----`)
+	defaultCAKey = []byte(`-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEILGtcOPZc6Lsro1OvVDb/P65tRAB6PjuWPRwtLScm+Cf
+-----END PRIVATE KEY-----`)
 )
 
 // New 创建新的授权管理器（向后兼容）
@@ -139,7 +68,17 @@ func New(opts ...func(*Authorizer) error) (*Authorizer, error) {
 func (a *Authorizer) SetCurrentCertVersion(version string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	currentCertVersion = version
+	a.certVersion = version
+}
+
+// GetCurrentCertVersion 获取当前证书格式版本
+func (a *Authorizer) GetCurrentCertVersion() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.certVersion == "" {
+		return defaultCertVersion
+	}
+	return a.certVersion
 }
 
 // getOID 生成指定用途的 OID
@@ -168,14 +107,17 @@ func (a *Authorizer) IssueClientCert(req *ClientCertRequest) (*Certificate, erro
 	// 应用默认值
 	req.SetDefaults()
 
-	// 生成新的RSA密钥对
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	// 生成新的客户端密钥对：
+	// - 切换为 Ed25519，避免 RSA keygen 在部分运行时/实验 GC 下的稳定性问题
+	// - 不改变现有证书扩展/校验逻辑（机器码、版本、绑定信息等均不依赖密钥算法）
+	// - KeyPEM 继续返回 PEM，改为 PKCS#8（标准且适配 Ed25519）
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, NewSystemError(ErrSystemClockSkew, "failed to generate private key", err)
 	}
 
 	// 创建证书模板
-	template := a.createCertificateTemplate(req, privateKey)
+	template := a.createCertificateTemplate(req, nil)
 
 	// 添加扩展信息
 	if err := a.addCertificateExtensions(template, req); err != nil {
@@ -183,14 +125,19 @@ func (a *Authorizer) IssueClientCert(req *ClientCertRequest) (*Certificate, erro
 	}
 
 	// 签发证书
-	certDER, err := x509.CreateCertificate(rand.Reader, template, a.caCert, &privateKey.PublicKey, a.caKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, template, a.caCert, publicKey, a.caKey)
 	if err != nil {
 		return nil, NewCertificateError(ErrInvalidCertificate, "failed to create certificate", err)
 	}
 
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return nil, NewSystemError(ErrSystemClockSkew, "failed to marshal private key", err)
+	}
+
 	return &Certificate{
 		CertPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
-		KeyPEM:    pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}),
+		KeyPEM:    pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 		MachineID: req.Identity.MachineID,
 		NotBefore: template.NotBefore,
 		NotAfter:  template.NotAfter,
@@ -313,8 +260,17 @@ func (a *Authorizer) ExtractClientInfo(certPEM []byte) (*ClientInfo, error) {
 		if ext.Id.Equal(a.getOID(3)) {
 			var versionInfo VersionInfo
 			if _, err := asn1.Unmarshal(ext.Value, &versionInfo); err == nil {
-				clientInfo.Version = versionInfo.MinRequiredVersion
+				clientInfo.MinClientVersion = versionInfo.MinClientVersion
 				clientInfo.ValidityPeriodDays = versionInfo.MaxValidDays
+			}
+		}
+
+		// 提取绑定信息 (OID: 4)
+		if ext.Id.Equal(a.getOID(4)) {
+			var bindingInfo BindingInfo
+			if _, err := asn1.Unmarshal(ext.Value, &bindingInfo); err == nil {
+				clientInfo.BindingMode = bindingInfo.Mode
+				clientInfo.BindingProvider = bindingInfo.Provider
 			}
 		}
 	}
@@ -389,37 +345,38 @@ func (a *Authorizer) validateVersionInfo(cert *x509.Certificate) error {
 	}
 
 	// 检查程序版本是否满足要求
-	if a.currentVersion != "0.0.0" && a.currentVersion != "dev" && a.currentVersion != "test" {
-		if versionInfo.MinRequiredVersion == "" {
+	if a.runtimeVersion != "" && a.runtimeVersion != "0.0.0" && a.runtimeVersion != "dev" && a.runtimeVersion != "test" {
+		if versionInfo.MinClientVersion == "" {
 			return NewValidationError(ErrInvalidVersion, "version information is missing in the certificate", nil)
 		}
 
 		// 验证版本格式
-		if _, err := parse(versionInfo.MinRequiredVersion); err != nil {
+		if _, err := parse(versionInfo.MinClientVersion); err != nil {
 			return NewValidationError(ErrInvalidVersion, "invalid version format in certificate", err).
-				WithDetail("certificate_version", versionInfo.MinRequiredVersion)
+				WithDetail("certificate_min_client_version", versionInfo.MinClientVersion)
 		}
 
 		// 比较版本
-		ok, err := compare(a.currentVersion, "<", versionInfo.MinRequiredVersion)
+		ok, err := compare(a.runtimeVersion, "<", versionInfo.MinClientVersion)
 		if err != nil {
 			return NewValidationError(ErrInvalidVersion, "version comparison error", err).
-				WithDetail("current_version", a.currentVersion).
-				WithDetail("required_version", versionInfo.MinRequiredVersion)
+				WithDetail("runtime_version", a.runtimeVersion).
+				WithDetail("required_min_client_version", versionInfo.MinClientVersion)
 		}
 		if ok {
 			return NewValidationError(ErrInvalidVersion, "program version is too old", nil).
-				WithDetail("current_version", a.currentVersion).
-				WithDetail("required_version", versionInfo.MinRequiredVersion).
+				WithDetail("runtime_version", a.runtimeVersion).
+				WithDetail("required_min_client_version", versionInfo.MinClientVersion).
 				WithSuggestion("请更新程序到最新版本")
 		}
 	}
 
 	// 证书格式版本检查
-	if versionInfo.CertVersion != currentCertVersion {
+	expectedVersion := a.GetCurrentCertVersion()
+	if versionInfo.LicenseSchemaVersion != expectedVersion {
 		return NewCertificateError(ErrInvalidCertificate, "certificate format version mismatch", nil).
-			WithDetail("certificate_version", versionInfo.CertVersion).
-			WithDetail("current_version", currentCertVersion).
+			WithDetail("certificate_version", versionInfo.LicenseSchemaVersion).
+			WithDetail("current_version", expectedVersion).
 			WithSuggestion("请使用匹配的证书格式版本")
 	}
 
@@ -475,24 +432,21 @@ func (a *Authorizer) GenerateCA(info CAInfo) error {
 	defer a.mu.Unlock()
 
 	// 设置默认值
-	if info.KeySize == 0 {
-		info.KeySize = 4096
-	}
 	if info.ValidDays == 0 {
 		info.ValidDays = 3650
 	}
 
-	// 生成RSA私钥
-	privateKey, err := rsa.GenerateKey(rand.Reader, info.KeySize)
+	// 生成 Ed25519 私钥
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return fmt.Errorf("failed to generate CA private key: %v", err)
 	}
 
 	// 创建证书模板
-	template := createCertificateTemplate(info, privateKey)
+	template := createCertificateTemplate(info)
 
 	// 自签名CA证书
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
 	if err != nil {
 		return fmt.Errorf("failed to create CA certificate: %v", err)
 	}
@@ -503,9 +457,13 @@ func (a *Authorizer) GenerateCA(info CAInfo) error {
 		Bytes: certDER,
 	})
 
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal CA private key: %v", err)
+	}
 	a.caKeyPEM = pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		Type:  "PRIVATE KEY",
+		Bytes: keyDER,
 	})
 
 	// 更新授权管理器的证书和私钥
@@ -590,8 +548,8 @@ func (a *Authorizer) SaveClientCert(cert *Certificate, dirPath ...string) error 
 	return nil
 }
 
-// GetCACertPEM 获取PEM格式的CA证书
-func (a *Authorizer) GetCACertPEM() []byte {
+// CACertPEM 获取PEM格式的CA证书
+func (a *Authorizer) CACertPEM() []byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.caCertPEM
@@ -620,18 +578,10 @@ func (a *Authorizer) initCA() error {
 		return errors.New("failed to decode CA private key PEM")
 	}
 
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	// 只支持 PKCS#8（Ed25519 / ECDSA / RSA 等都可用，但本包默认 Ed25519）
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		// 尝试解析 PKCS8 格式
-		pkcs8Key, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err2 != nil {
-			return fmt.Errorf("failed to parse CA private key: %v", err)
-		}
-		var ok bool
-		key, ok = pkcs8Key.(*rsa.PrivateKey)
-		if !ok {
-			return errors.New("CA private key is not RSA key")
-		}
+		return fmt.Errorf("failed to parse CA private key: %v", err)
 	}
 	a.caKey = key
 
@@ -640,7 +590,7 @@ func (a *Authorizer) initCA() error {
 }
 
 // createCertificateTemplate 创建证书模板
-func createCertificateTemplate(info CAInfo, privateKey *rsa.PrivateKey) *x509.Certificate {
+func createCertificateTemplate(info CAInfo) *x509.Certificate {
 	return &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		Subject: pkix.Name{
@@ -656,25 +606,12 @@ func createCertificateTemplate(info CAInfo, privateKey *rsa.PrivateKey) *x509.Ce
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            0,
-		SubjectKeyId:          generateSKI(&privateKey.PublicKey),
+		// SubjectKeyId 可选；这里不做 RSA-specific 的 SKI 计算，避免引入 sha1/rsa 依赖。
 	}
-}
-
-// 生成主体密钥标识符(Subject Key Identifier)
-func generateSKI(pubKey *rsa.PublicKey) []byte {
-	// 使用公钥的SHA-1哈希作为SKI
-	pubKeyDER, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return nil
-	}
-
-	h := sha1.New()
-	h.Write(pubKeyDER)
-	return h.Sum(nil)
 }
 
 // createCertificateTemplate 创建证书模板
-func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, _ *rsa.PrivateKey) *x509.Certificate {
+func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, _ any) *x509.Certificate {
 	// 构建主体信息
 	subject := pkix.Name{
 		CommonName:   req.Company.Name,
@@ -743,9 +680,9 @@ func (a *Authorizer) addCertificateExtensions(template *x509.Certificate, req *C
 
 	// 添加版本信息扩展
 	versionInfo := VersionInfo{
-		MinRequiredVersion: req.Technical.Version,
-		CertVersion:        currentCertVersion,
-		MaxValidDays:       req.Technical.ValidityPeriodDays,
+		MinClientVersion:     req.Technical.MinClientVersion,
+		LicenseSchemaVersion: a.GetCurrentCertVersion(),
+		MaxValidDays:         req.Technical.ValidityPeriodDays,
 	}
 	versionValue, err := asn1.Marshal(versionInfo)
 	if err != nil {
@@ -757,6 +694,30 @@ func (a *Authorizer) addCertificateExtensions(template *x509.Certificate, req *C
 		Value:    versionValue,
 	})
 
+	if extensions, err = a.appendBindingExtension(extensions, req); err != nil {
+		return err
+	}
 	template.ExtraExtensions = extensions
 	return nil
+}
+
+func (a *Authorizer) appendBindingExtension(extensions []pkix.Extension, req *ClientCertRequest) ([]pkix.Extension, error) {
+	if req.Identity == nil {
+		return extensions, nil
+	}
+	if req.Identity.BindingMode == "" && req.Identity.BindingProvider == "" {
+		return extensions, nil
+	}
+	bindingValue, err := asn1.Marshal(BindingInfo{
+		Mode:     req.Identity.BindingMode,
+		Provider: req.Identity.BindingProvider,
+	})
+	if err != nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to marshal binding info", err)
+	}
+	return append(extensions, pkix.Extension{
+		Id:       a.getOID(4),
+		Critical: false,
+		Value:    bindingValue,
+	}), nil
 }

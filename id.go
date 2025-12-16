@@ -57,14 +57,18 @@ const (
 	BindingModeFingerprint BindingMode = "fingerprint"
 	BindingModeMAC         BindingMode = "mac"
 	BindingModeMachineID   BindingMode = "machine_id"
+	BindingModeCustom      BindingMode = "custom"
 )
 
 // BindingResult 描述生成保护ID时采用的模式与降级原因
 type BindingResult struct {
 	Hash             string
 	Mode             BindingMode
+	Provider         string
 	FingerprintError error
 	MACError         error
+	ContainerMode    string // ContainerMode 容器绑定模式: "host"/"container"/"hybrid"/"none"
+	ContainerID      string // ContainerID 容器ID（如果检测到）
 }
 
 // FingerprintStatus 描述硬件指纹的值与稳定性
@@ -107,10 +111,10 @@ func ID() (string, error) {
 		return "", cachedError
 	}
 
-	cachedID = id
+	cachedID = strings.ToUpper(id)
 	cachedError = nil
 	cacheTime = time.Now()
-	return id, nil
+	return cachedID, nil
 }
 
 // ProtectedID returns a hashed version of the machine ID in a cryptographically secure way,
@@ -130,6 +134,7 @@ func ProtectedID(appID string) (string, error) {
 
 // ProtectedIDResult 返回包含详细绑定信息的结果
 func ProtectedIDResult(appID string) (*BindingResult, error) {
+	// 默认不启用容器特征派生逻辑，保持历史优先级：fingerprint -> MAC -> machine-id
 	return protectedIDWithPriority(appID, false)
 }
 
@@ -164,6 +169,7 @@ func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult
 				combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
 				result.Hash = protect(combined, id)
 				result.Mode = BindingModeFingerprint
+				result.Provider = string(BindingModeFingerprint)
 				return result, nil
 			}
 			result.FingerprintError = fmt.Errorf("hardware fingerprint unstable")
@@ -181,6 +187,7 @@ func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult
 			combined := fmt.Sprintf("%s/%s", appID, macInfo.Address)
 			result.Hash = protect(combined, id)
 			result.Mode = BindingModeMAC
+			result.Provider = macInfo.Iface
 			return result, nil
 		}
 		result.MACError = fmt.Errorf("unstable MAC address detected")
@@ -198,6 +205,7 @@ func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult
 	// 3. 基础保护ID（纯机器码）
 	result.Hash = protect(appID, id)
 	result.Mode = BindingModeMachineID
+	result.Provider = string(BindingModeMachineID)
 	return result, nil
 }
 
@@ -379,7 +387,7 @@ func GetInfo(appID string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	info.MachineID = id
+	info.MachineID = strings.ToUpper(id)
 
 	// 生成智能保护ID
 	if appID != "" {
@@ -399,9 +407,114 @@ func GetInfo(appID string) (*Info, error) {
 	info.IsContainer = IsContainer()
 	if info.IsContainer {
 		if containerID := getContainerID(); containerID != "" {
-			info.ContainerID = containerID
+			info.ContainerID = strings.ToUpper(containerID)
 		}
 	}
 
 	return info, nil
+}
+
+// ProtectedIDWithContainerAware 容器感知的保护ID生成
+//
+// 容器绑定逻辑说明：
+// - 非容器环境：保持历史行为，走“硬件指纹 → MAC → machine-id”的优先级链路（ContainerMode="none"）。
+// - 容器环境：根据 ContainerBindingConfig 选择策略：
+//   - host_hardware：在容器具备宿主机硬件可见性时，优先使用宿主机硬件指纹；不可用且允许降级则落到容器级。
+//   - container_scoped：仅使用容器命名空间/挂载等稳定特征派生；再不行使用容器 ID；最后落回标准 machine-id。
+//   - hybrid：尽量组合宿主机硬件指纹与容器稳定特征，兼顾稳定性与隔离性。
+func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig) (*BindingResult, error) {
+	if config == nil {
+		config = DefaultContainerBindingConfig()
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid container binding config: %w", err)
+	}
+
+	id, err := idProvider()
+	if err != nil {
+		return nil, fmt.Errorf("machineid: %v", err)
+	}
+
+	result := &BindingResult{}
+	isContainer := IsContainer()
+
+	if isContainer {
+		result.ContainerID = getContainerID()
+	}
+
+	// 非容器环境，使用标准优先级绑定
+	if !isContainer {
+		result.ContainerMode = "none"
+		return protectedIDWithPriority(appID, false)
+	}
+
+	// 容器环境下的智能绑定：
+	// 仅当明确配置 ContainerBindingConfig 时，才启用容器特征派生逻辑；
+	// 传入 nil 表示保持历史行为（避免在容器里意外从 MAC/machine-id 变成 custom）。
+	if config == nil {
+		result.ContainerMode = "none"
+		return protectedIDWithPriority(appID, false)
+	}
+
+	// 容器环境下的智能绑定（显式配置）
+	strategy := selectBindingStrategy(config)
+	result.ContainerMode = strategy
+
+	switch strategy {
+	case "host_hardware":
+		// 使用宿主机硬件指纹
+		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+			combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
+			result.Hash = protect(combined, id)
+			result.Mode = BindingModeFingerprint
+			result.Provider = "host_hardware"
+			return result, nil
+		}
+		if !config.FallbackToContainer {
+			return nil, fmt.Errorf("host hardware unavailable and fallback disabled")
+		}
+		fallthrough
+
+	case "container_scoped":
+		// 使用容器级派生ID
+		features := getContainerPersistentFeaturesWithConfig(config)
+		if len(features) > 0 {
+			combined := fmt.Sprintf("%s/%s/%s", appID, id, strings.Join(features, "|"))
+			result.Hash = protect(combined, id)
+			result.Mode = BindingModeCustom
+			result.Provider = "container_scoped"
+			return result, nil
+		}
+		// 降级到基础容器ID
+		if result.ContainerID != "" {
+			combined := fmt.Sprintf("%s/%s", appID, result.ContainerID)
+			result.Hash = protect(combined, id)
+			result.Mode = BindingModeCustom
+			result.Provider = "container_id"
+			return result, nil
+		}
+
+	case "hybrid":
+		// 混合模式：硬件指纹 + 容器特征
+		var components []string
+		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+			components = append(components, fpStatus.Value)
+		}
+		features := getContainerPersistentFeaturesWithConfig(config)
+		components = append(components, features...)
+
+		if len(components) > 0 {
+			combined := fmt.Sprintf("%s/%s/%s", appID, id, strings.Join(components, "|"))
+			result.Hash = protect(combined, id)
+			result.Mode = BindingModeCustom
+			result.Provider = "hybrid"
+			return result, nil
+		}
+	}
+
+	// 最终降级：标准机器ID
+	result.Hash = protect(appID, id)
+	result.Mode = BindingModeMachineID
+	result.Provider = "fallback"
+	return result, nil
 }

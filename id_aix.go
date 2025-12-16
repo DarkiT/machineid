@@ -15,7 +15,19 @@ func machineID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	trimmed := strings.ToUpper(strings.TrimSpace(string(out)))
+	if isContainerEnvironment() {
+		if cid := getContainerID(); cid != "" {
+			if normalized := normalizeContainerIDCandidate(cid); normalized != "" {
+				return strings.ToUpper(normalized), nil
+			}
+			return strings.ToUpper(trim(cid)), nil
+		}
+		if scoped := deriveContainerScopedID(trimmed); scoped != "" {
+			return scoped, nil
+		}
+	}
+	return trimmed, nil
 }
 
 // isContainerEnvironment AIX下的容器检测（比较简单）
@@ -42,8 +54,10 @@ func getContainerID() string {
 	}
 
 	for _, envVar := range envVars {
-		if value := os.Getenv(envVar); value != "" && len(value) >= 12 {
-			return value
+		if value := os.Getenv(envVar); value != "" {
+			if normalized := normalizeContainerIDCandidate(value); normalized != "" {
+				return strings.ToUpper(normalized)
+			}
 		}
 	}
 	return ""
