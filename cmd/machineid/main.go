@@ -27,6 +27,11 @@ Usage: machineid [options]
 Options:
   --appid    <AppID>    Protect machine id by hashing it together with an app id.
 
+Notes:
+  machineid without --appid prints the raw ID() result.
+  On Linux, ID() prefers a stable host-visible hardware machine ID first.
+  If no stable hardware signal is available, it falls back to the previous machine-id/container logic.
+
 Try:
   machineid
   machineid --appid MyAppID

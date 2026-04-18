@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+var (
+	hostHardwareMachineIDProvider    = getPreferredHardwareMachineID
+	containerScopedMachineIDProvider = deriveContainerScopedID
+)
+
 const (
 	// the environment variable name pointing to the machine id pathname
 	ENV_VARNAME = "MACHINE_ID_FILE"
@@ -38,43 +43,74 @@ const (
 // The logic implemented is a variation of the one described in https://github.com/denisbrodbeck/machineid/issues/5#issuecomment-523803164
 // See also https://unix.stackexchange.com/questions/144812/generate-consistent-machine-unique-id
 func machineID() (string, error) {
-	isContainer := false
-
-	env_pathname := os.Getenv(ENV_VARNAME)
-
-	userMachineId := path.Join(os.Getenv("HOME"), ".config", "machine-id")
-
 	containerID := getContainerID()
+	isContainer := containerEnvDetector()
 
-	if dockerEnvExist("/.dockerenv") || dockerEnvExist("/.dockerinit") || containerID != "" {
-		isContainer = true
+	baseID, err := readLinuxBaseMachineID()
+	if err != nil {
+		return "", err
 	}
 
+	if resolved, _ := resolvePreferredMachineID(baseID, containerID, isContainer); resolved != "" {
+		return resolved, nil
+	}
+
+	return baseID, nil
+}
+
+func readLinuxBaseMachineID() (string, error) {
+	envPathname := os.Getenv(ENV_VARNAME)
+	userMachineID := path.Join(os.Getenv("HOME"), ".config", "machine-id")
+
 	id, err := readFirstFile([]string{
-		env_pathname, dbusPath, dbusPathEtc, userMachineId,
+		envPathname, dbusPath, dbusPathEtc, userMachineID,
 	})
 	if err != nil {
 		id, err = readFile(linuxRandomUuid)
 		if err == nil {
 			if writeErr := writeFirstFile([]string{
-				env_pathname, dbusPathEtc, dbusPath, userMachineId,
+				envPathname, dbusPathEtc, dbusPath, userMachineID,
 			}, id); writeErr != nil {
 				return "", writeErr
 			}
 		}
 	}
+	if err != nil {
+		return "", err
+	}
+	return normalizeMachineIDValue(string(id)), nil
+}
 
-	trimmed := strings.ToUpper(trim(string(id)))
+func normalizeMachineIDValue(value string) string {
+	return strings.ToUpper(trim(value))
+}
+
+func resolvePreferredMachineID(baseID, containerID string, isContainer bool) (string, IDSource) {
+	hostID := normalizeMachineIDValue(hostHardwareMachineIDProvider())
+	containerID = normalizeMachineIDValue(containerID)
+	scopedID := ""
+	if isContainer {
+		scopedID = normalizeMachineIDValue(containerScopedMachineIDProvider(baseID))
+	}
+	return resolvePreferredMachineIDCandidates(baseID, hostID, containerID, scopedID, isContainer)
+}
+
+func resolvePreferredMachineIDCandidates(baseID, hostID, containerID, scopedID string, isContainer bool) (string, IDSource) {
+	if hostID != "" {
+		return hostID, IDSourceHostHardware
+	}
 	if isContainer {
 		if containerID != "" {
-			return strings.ToUpper(trim(containerID)), nil
+			return containerID, IDSourceContainerID
 		}
-		if scoped := deriveContainerScopedID(trimmed); scoped != "" {
-			return scoped, nil
+		if scopedID != "" {
+			return scopedID, IDSourceContainerScoped
 		}
 	}
-
-	return trimmed, err
+	if normalizedBaseID := normalizeMachineIDValue(baseID); normalizedBaseID != "" {
+		return normalizedBaseID, IDSourceMachineID
+	}
+	return "", IDSourceUnknown
 }
 
 func getContainerID() string {

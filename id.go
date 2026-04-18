@@ -5,7 +5,9 @@
 // https://godoc.org/github.com/darkit/machineid/cmd/machineid
 //
 // This package is Cross-Platform (tested on Win7+, Debian 8+, Ubuntu 14.04+, OS X 10.6+, FreeBSD 11+)
-// and does not use any internal hardware IDs (no MAC, BIOS, or CPU).
+// and keeps the raw ID API focused on a stable host identity; higher-level APIs may
+// additionally combine hardware signals, and on Linux the raw ID prefers host-visible
+// hardware identity when it is truly available.
 //
 // Returned machine IDs are generally stable for the OS installation
 // and usually stay the same after updates or hardware changes.

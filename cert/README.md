@@ -1331,11 +1331,11 @@ if err := auth.PerformSecurityCheck(); err != nil {
 
 - [GoDoc](https://pkg.go.dev/github.com/darkit/machineid/cert)
 - [示例代码](./examples.go)
-- [授权器配置与 Builder](./authorizer.go)
+- [Builder 配置方式](#builder-配置方式)
 
 ## 🔄 版本兼容性
 
-- **Go 版本**: 需要 Go 1.24+
+- **Go 版本**: 需要 Go 1.19+
 - **平台支持**: Windows, Linux, macOS
 - **架构支持**: amd64, arm64, 386
 

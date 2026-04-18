@@ -114,12 +114,14 @@ fmt.Printf("智能保护机器码: %s\n", protectedID)
 
 // 宿主机唯一（容器内可切换）
 hostUnique, err := machineid.UniqueIDResult("your.app.id", &machineid.UniqueIDOptions{
+    EnableContainer: true,
     Mode: machineid.UniqueIDModeHost,
 })
 if err != nil {
     log.Fatal(err)
 }
 fmt.Printf("宿主机唯一机器码: %s\n", hostUnique.Hash)
+fmt.Printf("宿主机唯一来源: %s (%s)\n", hostUnique.Provider, hostUnique.ContainerMode)
 
 // 直接获取MAC地址（可选）
 macAddr, err := machineid.GetMACAddress()
@@ -165,9 +167,12 @@ if machineid.IsContainer() {
 
 如需补充自定义容器 hint，可通过 `RegisterNamedContainerHintProvider(name string, provider ContainerHintProvider)` 注册具名提供者。该注册表同样为**进程级全局状态**，可使用 `UnregisterContainerHintProvider(name string) bool` 移除单个提供者，或使用 `ResetContainerHintProviders()` 清空全部自定义 hint provider，适合测试隔离和短生命周期扩展场景。
 
-容器 scoped ID 的 hint 合成策略默认保持历史行为：`ContainerHintCombineFirst`（只消费第一条非空 hint）。若需要调整底层 `ID()` 在“容器内且拿不到 containerID”场景下的进程级 fallback 行为，可调用 `SetContainerHintCombineMode(ContainerHintCombineAll)` 显式切换；该设置会自动清理 `ID()` 缓存，避免新旧策略混用。
+容器 scoped ID 的 hint 合成策略默认保持历史行为：`ContainerHintCombineFirst`（只消费第一条非空 hint）。底层 `ID()` 在 Linux 上会先尝试宿主可见硬件机器码；只有拿不到足够稳定的硬件特征时，才会在容器内继续走 container-scoped / container ID fallback，在宿主机上则回退到原先的 machine-id。若需要调整这条 fallback 链里“container scoped ID”的进程级 hint 合成行为，可调用 `SetContainerHintCombineMode(ContainerHintCombineAll)` 显式切换；该设置会自动清理 `ID()` 缓存，避免新旧策略混用。
 
 对 `ProtectedIDWithContainerAware` / `UniqueIDResult` 这类显式容器感知 API，最佳实践是通过 `ContainerBindingConfig.HintCombineMode` 按调用控制特征合成策略，而不是依赖进程级全局开关。默认 `DefaultContainerBindingConfig()` 会保持当前语义：组合全部稳定容器特征。
+
+小心这里的边界：`ID()` 是底层 raw identity，在 Linux 上现在会优先选择**宿主可见硬件机器码**，不论当前进程是在容器里还是宿主机上；只有硬件特征不可见或不够稳定时，才回退到原先的 machine-id / container fallback。  
+而 `UniqueIDModeHost` / `UniqueIDModeContainer` 是更高层的业务语义开关：前者表达“尽量绑定宿主/VM”，后者表达“尽量绑定容器实例”。如果你显式传 `UniqueIDOptions`，记得同时把 `EnableContainer: true` 打开，否则 `Mode` 不会触发容器感知分支。
 
 ### 容器绑定最佳实践
 
@@ -222,6 +227,20 @@ fmt.Printf("底层机器码: %s\n", id)
 
 推荐心法：业务逻辑优先走 `ContainerBindingConfig.HintCombineMode`；只有在兼容旧代码、且确实依赖底层 `ID()` 容器 fallback 时，才触碰 `SetContainerHintCombineMode(...)` 这种进程级全局态。
 
+### 当前 ID 来源诊断
+
+```go
+inspection, err := machineid.InspectID()
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("当前 ID: %s\n", inspection.ID)
+fmt.Printf("来源: %s\n", inspection.Source)
+fmt.Printf("是否容器: %t\n", inspection.IsContainer)
+fmt.Printf("回退链: %v\n", inspection.FallbackChain)
+```
+
 ## 🔧 API 参考
 
 ### 核心函数
@@ -232,6 +251,7 @@ fmt.Printf("底层机器码: %s\n", id)
 | `ProtectedID(appID)` | **获取智能硬件绑定的保护机器码（推荐）** | `(string, error)` |
 | `GetInfo(appID)` | **获取完整系统信息（推荐）** | `(*Info, error)` |
 | `GetMACAddress()` | 获取主网卡MAC地址 | `(string, error)` |
+| `InspectID()` | 诊断当前 `ID()` 走到的来源链路 | `(*IDInspection, error)` |
 | `IsContainer()` | 检查是否在容器环境 | `bool` |
 | `ClearCache()` | 清除所有缓存 | `void` |
 
@@ -510,7 +530,7 @@ info, _ := machineid.GetInfo("app")
 
 1. **虚拟机克隆**：克隆的虚拟机可能具有相同的机器码
 2. **系统重装**：重装操作系统通常会更改机器码
-3. **容器环境**：容器中的机器码基于容器 ID，重新创建容器会改变
+3. **容器环境**：优先使用宿主可见硬件机器码；若硬件特征不可见或不够稳定，则回退到 container-scoped / container ID，重新创建容器时可能变化
 4. **Linux 用户目录**：用户级机器码文件 `$HOME/.config/machine-id` 在某些环境下可能不可用
 
 ## 🔗 相关链接

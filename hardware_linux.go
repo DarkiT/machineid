@@ -292,25 +292,39 @@ func getCPUInfo(info *linuxHardwareInfo) {
 		lines := strings.Split(cpuinfo, "\n")
 		coreCount := 0
 		var signatures []string
+		seenSignature := make(map[string]struct{})
 
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "processor") {
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, ":", 2)
+			key := strings.TrimSpace(parts[0])
+			value := ""
+			if len(parts) == 2 {
+				value = strings.TrimSpace(parts[1])
+			}
+
+			if key == "processor" {
 				coreCount++
-			} else if strings.HasPrefix(line, "Serial") {
-				if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
-					serial := strings.TrimSpace(parts[1])
-					if serial != "" {
-						info.CPUIdentifier = serial
-					}
+				continue
+			}
+
+			switch key {
+			case "Serial":
+				if value != "" {
+					info.CPUIdentifier = value
 				}
-			} else if strings.HasPrefix(line, "cpu family") ||
-				strings.HasPrefix(line, "model") ||
-				strings.HasPrefix(line, "stepping") ||
-				strings.HasPrefix(line, "microcode") {
-				if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
-					signatures = append(signatures, strings.TrimSpace(parts[1]))
+			case "vendor_id", "model name", "cpu family", "model", "stepping", "microcode":
+				if value == "" {
+					continue
 				}
+				if _, ok := seenSignature[key+":"+value]; ok {
+					continue
+				}
+				seenSignature[key+":"+value] = struct{}{}
+				signatures = append(signatures, key+"="+value)
 			}
 		}
 
@@ -362,17 +376,15 @@ func getPCIInfo(info *linuxHardwareInfo) {
 	if entries, err := os.ReadDir(pciPath); err == nil {
 		var devices []string
 		for _, entry := range entries {
-			if entry.IsDir() {
-				// 读取设备和厂商ID
-				vendorPath := filepath.Join(pciPath, entry.Name(), "vendor")
-				devicePath := filepath.Join(pciPath, entry.Name(), "device")
+			// sysfs 下 PCI 设备通常以符号链接暴露；不能依赖 entry.IsDir()。
+			vendorPath := filepath.Join(pciPath, entry.Name(), "vendor")
+			devicePath := filepath.Join(pciPath, entry.Name(), "device")
 
-				vendor, vendorErr := readFileString(vendorPath)
-				device, deviceErr := readFileString(devicePath)
+			vendor, vendorErr := readFileString(vendorPath)
+			device, deviceErr := readFileString(devicePath)
 
-				if vendorErr == nil && deviceErr == nil {
-					devices = append(devices, strings.TrimSpace(vendor)+":"+strings.TrimSpace(device))
-				}
+			if vendorErr == nil && deviceErr == nil {
+				devices = append(devices, strings.TrimSpace(vendor)+":"+strings.TrimSpace(device))
 			}
 		}
 		if len(devices) > 0 {
