@@ -225,3 +225,144 @@ func trimSpaces(s string) string {
 	}
 	return s[start:end]
 }
+
+// HasFeature 检查 License 是否有指定功能
+// 支持点分路径，如 "modules.report.enabled"
+func (p *LicensePayload) HasFeature(path string) bool {
+	if p.Features == nil {
+		return false
+	}
+	val, ok := p.GetFeatureValue(path)
+	if !ok {
+		return false
+	}
+	// 如果值是 bool 类型，返回其值
+	if b, ok := val.(bool); ok {
+		return b
+	}
+	// 其他类型只要存在就返回 true
+	return true
+}
+
+// GetFeatureValue 获取功能值（支持点分路径）
+// 例如: "modules.report.enabled" 会依次访问 Features["modules"]["report"]["enabled"]
+func (p *LicensePayload) GetFeatureValue(path string) (any, bool) {
+	if p.Features == nil {
+		return nil, false
+	}
+
+	parts := splitDotPath(path)
+	var current any = p.Features
+
+	for _, part := range parts {
+		switch v := current.(type) {
+		case map[string]any:
+			val, ok := v[part]
+			if !ok {
+				return nil, false
+			}
+			current = val
+		default:
+			return nil, false
+		}
+	}
+
+	return current, true
+}
+
+// GetModuleConfig 获取模块配置
+// 假设 Features 结构为: {"modules": {"report": {"enabled": true, "quota": 100}}}
+func (p *LicensePayload) GetModuleConfig(moduleName string) (*LicenseModuleConfig, bool) {
+	val, ok := p.GetFeatureValue("modules." + moduleName)
+	if !ok {
+		return nil, false
+	}
+
+	moduleMap, ok := val.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+
+	config := &LicenseModuleConfig{
+		Name: moduleName,
+	}
+
+	if enabled, ok := moduleMap["enabled"].(bool); ok {
+		config.Enabled = enabled
+	}
+	if quota, ok := moduleMap["quota"].(float64); ok {
+		config.Quota = int(quota)
+	}
+	if notAfter, ok := moduleMap["not_after"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, notAfter); err == nil {
+			config.NotAfter = t
+		} else if t, err := time.Parse("2006-01-02", notAfter); err == nil {
+			config.NotAfter = t
+		}
+	}
+	if notBefore, ok := moduleMap["not_before"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, notBefore); err == nil {
+			config.NotBefore = t
+		} else if t, err := time.Parse("2006-01-02", notBefore); err == nil {
+			config.NotBefore = t
+		}
+	}
+	if extra, ok := moduleMap["extra"].(string); ok {
+		config.Extra = extra
+	}
+
+	return config, true
+}
+
+// ValidateModuleAccess 验证模块访问权限
+func (p *LicensePayload) ValidateModuleAccess(moduleName string, now time.Time) error {
+	config, ok := p.GetModuleConfig(moduleName)
+	if !ok {
+		return NewValidationError(ErrModuleNotAuthorized, "module not found in license", nil).
+			WithDetail("module", moduleName)
+	}
+
+	if !config.Enabled {
+		return NewValidationError(ErrModuleNotAuthorized, "module is disabled", nil).
+			WithDetail("module", moduleName)
+	}
+
+	if !config.NotBefore.IsZero() && now.Before(config.NotBefore) {
+		return NewValidationError(ErrModuleExpired, "module not yet valid", nil).
+			WithDetail("module", moduleName).
+			WithDetail("not_before", config.NotBefore)
+	}
+
+	if !config.NotAfter.IsZero() && now.After(config.NotAfter) {
+		return NewValidationError(ErrModuleExpired, "module authorization expired", nil).
+			WithDetail("module", moduleName).
+			WithDetail("not_after", config.NotAfter)
+	}
+
+	return nil
+}
+
+// LicenseModuleConfig License 中的模块配置
+type LicenseModuleConfig struct {
+	Name      string
+	Enabled   bool
+	Quota     int
+	NotBefore time.Time
+	NotAfter  time.Time
+	Extra     string
+}
+
+// splitDotPath 分割点分路径
+func splitDotPath(path string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '.' {
+			if i > start {
+				parts = append(parts, path[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return parts
+}

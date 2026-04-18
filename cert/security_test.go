@@ -89,7 +89,8 @@ func TestSecurityManager_DifferentLevels(t *testing.T) {
 	for _, level := range levels {
 		level := level
 		t.Run(fmt.Sprintf("级别%d", level), func(t *testing.T) {
-			t.Parallel()
+			// NewSecurityManager 会启动后台 goroutine 与分配内存，
+			// 在并行测试中可能引发运行时不稳定（尤其在资源受限环境）。
 
 			sm := NewSecurityManager(level)
 			defer sm.StopSecurityChecks()
@@ -178,6 +179,198 @@ func TestPerformSecurityCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecurityManager_Check_ReturnsTypedErrors(t *testing.T) {
+	t.Parallel()
+	SetSecurityErrorSanitizeEnabled(false)
+	t.Cleanup(func() { SetSecurityErrorSanitizeEnabled(true) })
+	t.Cleanup(func() { checkDebuggerFn = func() bool { return checkDebugger() } })
+	t.Cleanup(func() { checkAdvancedDebuggerFn = checkAdvancedDebugger })
+	t.Cleanup(func() { virtualMachineDetectorFn = func() bool { return false } })
+
+	sm := NewSecurityManager(SecurityLevelAdvanced)
+	defer sm.StopSecurityChecks()
+
+	virtualMachineDetectorFn = func() bool { return false }
+
+	// 1) 强制触发调试器检测
+	prevDbg := checkDebuggerFn
+	checkDebuggerFn = func() bool { return true }
+	t.Cleanup(func() { checkDebuggerFn = prevDbg })
+	prevAdv := checkAdvancedDebuggerFn
+	checkAdvancedDebuggerFn = func() bool { return false }
+	t.Cleanup(func() { checkAdvancedDebuggerFn = prevAdv })
+	prevVM := virtualMachineDetectorFn
+	virtualMachineDetectorFn = func() bool { return false }
+	t.Cleanup(func() { virtualMachineDetectorFn = prevVM })
+
+	err := sm.Check()
+	if err == nil {
+		t.Fatalf("期望返回安全错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Type != SecurityError || ce.Code != ErrDebuggerDetected {
+		t.Fatalf("错误类型/码不匹配: type=%v code=%s", ce.Type, ce.Code)
+	}
+
+	// 2) 强制触发内存完整性异常
+	checkDebuggerFn = func() bool { return false }
+	sm.mu.Lock()
+	sm.memProtect[0] ^= 0xFF
+	sm.mu.Unlock()
+
+	err = sm.Check()
+	if err == nil {
+		t.Fatalf("期望返回内存完整性错误，但得到 nil")
+	}
+	ce, ok = err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Type != SecurityError || ce.Code != ErrMemoryTampered {
+		t.Fatalf("错误类型/码不匹配: type=%v code=%s", ce.Type, ce.Code)
+	}
+}
+
+func TestSecurityManager_Check_VirtualMachineDetected(t *testing.T) {
+	// 该测试依赖全局 hook，避免并行导致被其它测试覆盖。
+	SetSecurityErrorSanitizeEnabled(false)
+	t.Cleanup(func() { SetSecurityErrorSanitizeEnabled(true) })
+	t.Cleanup(func() { checkDebuggerFn = func() bool { return checkDebugger() } })
+	t.Cleanup(func() { checkAdvancedDebuggerFn = checkAdvancedDebugger })
+	t.Cleanup(func() { virtualMachineDetectorFn = func() bool { return false } })
+
+	sm := NewSecurityManager(SecurityLevelAdvanced)
+	defer sm.StopSecurityChecks()
+
+	prevVM := virtualMachineDetectorFn
+	virtualMachineDetectorFn = func() bool { return true }
+	t.Cleanup(func() { virtualMachineDetectorFn = prevVM })
+
+	// 避免被调试器检查短路
+	prevDbg := checkDebuggerFn
+	checkDebuggerFn = func() bool { return false }
+	t.Cleanup(func() { checkDebuggerFn = prevDbg })
+	prevAdv := checkAdvancedDebuggerFn
+	checkAdvancedDebuggerFn = func() bool { return false }
+	t.Cleanup(func() { checkAdvancedDebuggerFn = prevAdv })
+
+	err := sm.Check()
+	if err == nil {
+		t.Fatalf("期望返回虚拟机检测错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Type != SecurityError || ce.Code != ErrVirtualMachineDetected {
+		t.Fatalf("错误类型/码不匹配: type=%v code=%s", ce.Type, ce.Code)
+	}
+}
+
+func TestDetectWindowsDebugger_HardwareBreakpointHook(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("该测试用于非 Windows 环境验证 hook 路径；Windows 下真实检测由系统 API 决定")
+	}
+	// 该测试只验证 hook 生效的调用路径，不依赖真实 Windows；
+	// 通过覆盖 hardwareBreakpointDetectorFn 并直接调用 detectWindowsDebugger。
+	prev := hardwareBreakpointDetectorFn
+	hardwareBreakpointDetectorFn = func() bool { return true }
+	t.Cleanup(func() { hardwareBreakpointDetectorFn = prev })
+
+	if !detectWindowsDebugger(nil) {
+		t.Fatalf("期望硬件断点 hook 触发 detectWindowsDebugger=true")
+	}
+}
+
+func TestDetectWindowsDebugger_DebugPortHook(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("该测试用于非 Windows 环境验证 hook 路径；Windows 下真实检测由系统 API 决定")
+	}
+	prev := debugPortDetectorFn
+	debugPortDetectorFn = func() bool { return true }
+	t.Cleanup(func() { debugPortDetectorFn = prev })
+
+	// 避免其它分支短路
+	isBeingDebuggedByPEB = func() bool { return false }
+	checkDebugger = func() bool { return false }
+	prevPEB := isBeingDebuggedByPEB
+	isBeingDebuggedByPEB = func() bool { return false }
+	t.Cleanup(func() { isBeingDebuggedByPEB = prevPEB })
+	prevChk := checkDebugger
+	checkDebugger = func() bool { return false }
+	t.Cleanup(func() { checkDebugger = prevChk })
+	prevHB := hardwareBreakpointDetectorFn
+	hardwareBreakpointDetectorFn = func() bool { return false }
+	t.Cleanup(func() { hardwareBreakpointDetectorFn = prevHB })
+
+	if !detectWindowsDebugger(nil) {
+		t.Fatalf("期望 debug port hook 触发 detectWindowsDebugger=true")
+	}
+}
+
+func TestDetectWindowsDebugger_DebugObjectHook(t *testing.T) {
+	// 依赖全局 hook，避免并行互相覆盖。
+	if runtime.GOOS == "windows" {
+		t.Skip("该测试用于非 Windows 环境验证 hook 路径；Windows 下真实检测由系统 API 决定")
+	}
+	prev := debugObjectDetectorFn
+	debugObjectDetectorFn = func() bool { return true }
+	t.Cleanup(func() { debugObjectDetectorFn = prev })
+
+	// 避免其它分支短路
+	prevPort := debugPortDetectorFn
+	debugPortDetectorFn = func() bool { return false }
+	t.Cleanup(func() { debugPortDetectorFn = prevPort })
+	prevFlags := debugFlagsDetectorFn
+	debugFlagsDetectorFn = func() bool { return false }
+	t.Cleanup(func() { debugFlagsDetectorFn = prevFlags })
+	prevHB := hardwareBreakpointDetectorFn
+	hardwareBreakpointDetectorFn = func() bool { return false }
+	t.Cleanup(func() { hardwareBreakpointDetectorFn = prevHB })
+
+	if !detectWindowsDebugger(nil) {
+		t.Fatalf("期望 debug object hook 触发 detectWindowsDebugger=true")
+	}
+}
+
+func TestDetectWindowsDebugger_DebugFlagsHook(t *testing.T) {
+	// 依赖全局 hook，避免并行互相覆盖。
+	if runtime.GOOS == "windows" {
+		t.Skip("该测试用于非 Windows 环境验证 hook 路径；Windows 下真实检测由系统 API 决定")
+	}
+	prev := debugFlagsDetectorFn
+	debugFlagsDetectorFn = func() bool { return true }
+	t.Cleanup(func() { debugFlagsDetectorFn = prev })
+
+	// 避免其它分支短路
+	prevPort := debugPortDetectorFn
+	debugPortDetectorFn = func() bool { return false }
+	t.Cleanup(func() { debugPortDetectorFn = prevPort })
+	prevObj := debugObjectDetectorFn
+	debugObjectDetectorFn = func() bool { return false }
+	t.Cleanup(func() { debugObjectDetectorFn = prevObj })
+	prevHB := hardwareBreakpointDetectorFn
+	hardwareBreakpointDetectorFn = func() bool { return false }
+	t.Cleanup(func() { hardwareBreakpointDetectorFn = prevHB })
+
+	if !detectWindowsDebugger(nil) {
+		t.Fatalf("期望 debug flags hook 触发 detectWindowsDebugger=true")
+	}
+}
+
+func TestSecurityManager_Check_HardwareBreakpointDetected(t *testing.T) {
+	t.Parallel()
+	// 说明：硬件断点检测依赖 Windows 的线程上下文。
+	// 在非 Windows 环境下不执行；在 Windows 环境下也无法稳定构造硬件断点，
+	// 因此该能力通过 hook 与交叉编译验证保障可用性。
+	t.Skip("硬件断点检测在真实 Windows 环境下验证")
 }
 
 // TestGetSecurityLevel 测试获取安全级别

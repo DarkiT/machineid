@@ -68,7 +68,26 @@ func TestContainerScopedIDFromHints(t *testing.T) {
 	if other := containerScopedIDFromHints(base, "", "second"); other == "" {
 		t.Fatal("存在有效 hint 时不应为空")
 	}
+	legacy := containerScopedIDFromHints(base, "first", "second")
+	legacySum := sha256.Sum256([]byte(base + ":first"))
+	legacyWant := hex.EncodeToString(legacySum[:])
+	if legacy != legacyWant {
+		t.Fatalf("历史模式应只消费第一条非空 hint, 期望 %s, 实际 %s", legacyWant, legacy)
+	}
 	if none := containerScopedIDFromHints(base); none != "" {
 		t.Fatalf("没有 hint 时应返回空, 实际 %s", none)
+	}
+}
+
+func TestContainerScopedIDFromHintsWithModeAll(t *testing.T) {
+	base := "base-id"
+	got := containerScopedIDFromHintsWithMode(base, ContainerHintCombineAll, "first", "", "second", "first")
+	if got == "" {
+		t.Fatal("期望返回非空哈希")
+	}
+	sum := sha256.Sum256([]byte(base + ":first|second"))
+	want := hex.EncodeToString(sum[:])
+	if got != want {
+		t.Fatalf("all 模式哈希结果不匹配, 期望 %s, 实际 %s", want, got)
 	}
 }

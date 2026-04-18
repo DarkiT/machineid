@@ -31,6 +31,30 @@ func RegisterBindingProvider(name string, provider BindingProviderFunc) {
 	bindingProviders = append(bindingProviders, bindingProvider{name: name, fn: provider})
 }
 
+// UnregisterBindingProvider 移除指定名称的自定义绑定提供者
+func UnregisterBindingProvider(name string) bool {
+	if name == "" {
+		return false
+	}
+	bindingProvidersMu.Lock()
+	defer bindingProvidersMu.Unlock()
+	for i, p := range bindingProviders {
+		if p.name != name {
+			continue
+		}
+		bindingProviders = append(bindingProviders[:i], bindingProviders[i+1:]...)
+		return true
+	}
+	return false
+}
+
+// ResetBindingProviders 清空全部自定义绑定提供者
+func ResetBindingProviders() {
+	bindingProvidersMu.Lock()
+	bindingProviders = nil
+	bindingProvidersMu.Unlock()
+}
+
 func listBindingProviders() []bindingProvider {
 	bindingProvidersMu.RLock()
 	defer bindingProvidersMu.RUnlock()

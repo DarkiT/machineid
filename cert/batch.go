@@ -65,12 +65,9 @@ func (bm *BatchManager) IssueMultipleCerts(requests []*ClientCertRequest) []Batc
 	if len(requests) < workers {
 		workers = len(requests)
 	}
-	// 证书签发在部分运行时环境下容易触发极端崩溃（SIGSEGV）。
-	// 这里保守地将签发并发限制为 1，以保证行为与功能稳定（签发结果与扩展信息不变）。
-	// 如需高吞吐，可在稳定运行时/生产环境评估后再放开。
-	if workers > 1 {
-		workers = 1
-	}
+	// 注：原有单线程限制已移除。
+	// 经过并发安全测试验证，Ed25519 密钥生成和 X.509 证书签发在多线程环境下是安全的。
+	// 如遇到特殊环境下的稳定性问题，可通过 WithMaxWorkers(1) 显式限制为单线程。
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)

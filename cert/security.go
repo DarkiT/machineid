@@ -87,7 +87,7 @@ func NewSecurityManager(level int) *SecurityManager {
 // checkAdvancedDebugger 检测调试器（增强版）
 func checkAdvancedDebugger() bool {
 	// 首先使用平台特定的基础检测
-	if checkDebugger() {
+	if checkDebuggerFn() {
 		return true
 	}
 
@@ -126,6 +126,27 @@ func checkAdvancedDebugger() bool {
 		return true
 	}
 
+	return false
+}
+
+// detectSystemCallTracing 系统调用跟踪检测
+//
+// Linux: 通过 TracerPid 检测 ptrace/strace 等跟踪。
+// 其他平台：目前不启用（避免误报）。
+func detectSystemCallTracing() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "TracerPid:") {
+			fields := strings.Fields(line)
+			return len(fields) >= 2 && fields[1] != "0"
+		}
+	}
 	return false
 }
 
@@ -222,13 +243,28 @@ func detectWindowsDebugger(_ []string) bool {
 		return true
 	}
 
-	// 检查PEB调试标志
-	if checkPEBDebugFlag() {
+	// 检查 PEB.BeingDebugged
+	if isBeingDebuggedByPEB() {
 		return true
 	}
 
 	// 检查调试器端口
 	if checkDebugPort() {
+		return true
+	}
+	// 检查调试端口（NtQueryInformationProcess）
+	if debugPortDetectorFn != nil && debugPortDetectorFn() {
+		return true
+	}
+	if debugObjectDetectorFn != nil && debugObjectDetectorFn() {
+		return true
+	}
+	if debugFlagsDetectorFn != nil && debugFlagsDetectorFn() {
+		return true
+	}
+
+	// 检查硬件断点（DR0-DR7）
+	if hardwareBreakpointDetectorFn != nil && hardwareBreakpointDetectorFn() {
 		return true
 	}
 
@@ -240,29 +276,7 @@ func isDebuggerPresentWindows() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	return checkDebugger()
-}
-
-// checkPEBDebugFlag 检查 PEB 中的调试标志
-func checkPEBDebugFlag() bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-	// 通过检查异常处理行为来推断是否有调试器
-	suspicious := false
-	defer func() {
-		if r := recover(); r != nil {
-			suspicious = true
-		}
-	}()
-	start := time.Now()
-	dummy := 0
-	for i := 0; i < 10; i++ {
-		dummy += i
-	}
-	_ = dummy
-	elapsed := time.Since(start)
-	return elapsed > time.Millisecond*5 || suspicious
+	return checkDebuggerFn()
 }
 
 // checkDebugPort 检查调试端口
@@ -270,7 +284,7 @@ func checkDebugPort() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	return checkDebugger()
+	return checkDebuggerFn()
 }
 
 // detectLinuxDebugger Linux调试器检测
@@ -306,30 +320,23 @@ func detectLinuxDebugger(debuggerNames []string) bool {
 
 // detectMacDebugger macOS调试器检测
 func detectMacDebugger(_ []string) bool {
-	// 简化实现：检查进程名称
-	// 实际应该使用 sysctl 或者 proc_info
-	return false
-}
-
-// detectSystemCallTracing 系统调用跟踪检测
-func detectSystemCallTracing() bool {
-	// Linux: 检查 ptrace
-	if runtime.GOOS == "linux" {
-		// 简化实现：读取 /proc/self/status
+	// macOS：通过 sysctl 检测 P_TRACED（是否被调试）
+	if runtime.GOOS != "darwin" {
 		return false
 	}
-	return false
+	return checkDebugger()
 }
 
 // detectMemoryDebugging 内存调试检测
 func detectMemoryDebugging() bool {
-	// 检查内存页属性异常
+	// 检查内存页属性异常（占位）。
+	// 说明：Go 在不同平台下对内存映射的控制有限，过强的启发式容易误报。
 	return false
 }
 
 // detectDebuggerAPI 调试器API检测
 func detectDebuggerAPI() bool {
-	// 平台特定的API检测
+	// 平台特定的API检测（占位）。
 	return false
 }
 
@@ -342,8 +349,10 @@ func detectASLRBypass() bool {
 	pc := make([]uintptr, 1)
 	runtime.Callers(1, pc)
 
-	// uintptr 为无符号，直接与阈值比较即可
-	if pc[0] < 0x10000 || pc[0] > 0x7fffffffffff {
+	// uintptr 为无符号，阈值需适配 32/64 位。
+	// 说明：0x7fffffffffff 在 32 位上溢出；用 ^uintptr(0) 获取当前平台最大地址。
+	maxAddr := ^uintptr(0)
+	if pc[0] < 0x10000 || pc[0] > maxAddr {
 		return true
 	}
 
@@ -450,26 +459,43 @@ func (sm *SecurityManager) Check() error {
 
 	// 基础检查
 	if level >= SecurityLevelBasic {
-		if checkDebugger() {
-			return fmt.Errorf("security: debugger detected")
+		if checkDebuggerFn() {
+			return NewSecurityError(ErrDebuggerDetected, "debugger detected", nil)
 		}
 	}
 
 	// 高级检查
 	if level >= SecurityLevelAdvanced {
-		if checkAdvancedDebugger() {
-			return fmt.Errorf("security: advanced debugging detected")
+		if checkAdvancedDebuggerFn() {
+			return NewSecurityError(ErrDebuggerDetected, "advanced debugging detected", nil)
+		}
+		if virtualMachineDetectorFn != nil && virtualMachineDetectorFn() {
+			return NewSecurityError(ErrVirtualMachineDetected, "virtual machine environment detected", nil)
+		}
+		// Windows 硬件断点检测：作为高级反调试的一部分
+		if runtime.GOOS == "windows" && hardwareBreakpointDetectorFn != nil && hardwareBreakpointDetectorFn() {
+			return NewSecurityError(ErrHardwareBreakpointDetected, "hardware breakpoint detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugPortDetectorFn != nil && debugPortDetectorFn() {
+			return NewSecurityError(ErrDebugPortDetected, "debug port detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugObjectDetectorFn != nil && debugObjectDetectorFn() {
+			return NewSecurityError(ErrDebugObjectDetected, "debug object detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugFlagsDetectorFn != nil && debugFlagsDetectorFn() {
+			return NewSecurityError(ErrDebugFlagsDetected, "debug flags detected", nil)
 		}
 
 		if !sm.verifyMemoryIntegrity() {
-			return fmt.Errorf("security: memory integrity violation")
+			return NewSecurityError(ErrMemoryTampered, "memory integrity violation", nil)
 		}
 	}
 
 	// 关键检查
 	if level >= SecurityLevelCritical {
 		if count > 0 {
-			return fmt.Errorf("security: multiple security violations detected")
+			return NewSecurityError(ErrDebuggerDetected, "multiple security violations detected", nil).
+				WithDetail("violation_count", count)
 		}
 	}
 
@@ -478,6 +504,10 @@ func (sm *SecurityManager) Check() error {
 
 // Close 关闭安全管理器
 func (sm *SecurityManager) Close() {
+	// 允许重复调用 Close，不应触发 panic
+	defer func() {
+		_ = recover()
+	}()
 	close(sm.done)
 	sm.wg.Wait()
 }
@@ -577,8 +607,9 @@ func (sm *SecurityManager) DetectSandbox() bool {
 
 // protectMemory 保护关键内存区域（SecurityManager 方法）
 func (sm *SecurityManager) protectMemory() error {
-	// 调用平台特定的 mprotect
-	return sm.mprotect()
+	// Go 堆内对象可能与其他数据共享页，直接 mprotect 会导致不可预期的崩溃。
+	// 当前实现保守跳过，避免影响运行时稳定性。
+	return nil
 }
 
 // === 平台特定环境检测实现 ===
@@ -644,27 +675,140 @@ func detectVirtualMachineDarwin() bool {
 	return false
 }
 
-func detectSandboxLinux() bool {
-	// Linux “沙箱/容器”启发式：
-	// - cgroup 中出现 docker/kubepods/containerd 等路径
-	// - /proc/1/sched 或 /proc/1/cmdline 表现为 init 被替换（强信号）
-	//
-	// 说明：容器不等于恶意沙箱，但在安全策略中通常需要区别对待。
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		if containsAnyLower(string(data), []string{"docker", "kubepods", "containerd", "lxc"}) {
-			return true
-		}
+// EnvironmentType 环境类型
+type EnvironmentType int
+
+const (
+	EnvTypePhysical       EnvironmentType = iota // 物理机
+	EnvTypeVirtualMachine                        // 虚拟机
+	EnvTypeContainer                             // 容器（Docker、K8s等）
+	EnvTypeSandbox                               // 沙箱（受限环境）
+)
+
+// String 返回环境类型的字符串表示
+func (e EnvironmentType) String() string {
+	switch e {
+	case EnvTypePhysical:
+		return "physical"
+	case EnvTypeVirtualMachine:
+		return "virtual_machine"
+	case EnvTypeContainer:
+		return "container"
+	case EnvTypeSandbox:
+		return "sandbox"
+	default:
+		return "unknown"
 	}
-	if data, err := os.ReadFile("/proc/1/cmdline"); err == nil {
-		// cmdline 以 \0 分隔，直接做包含判断即可
-		if containsAnyLower(string(data), []string{"docker", "containerd", "kubepods", "lxc"}) {
+}
+
+// DetectEnvironment 检测当前运行环境类型
+// 优先级：容器 > 沙箱 > 虚拟机 > 物理机
+func (sm *SecurityManager) DetectEnvironment() EnvironmentType {
+	// 优先检测容器（容器内也可能在VM中，但容器是更具体的环境）
+	if isContainerEnvironment() {
+		return EnvTypeContainer
+	}
+
+	// 检测真正的沙箱（非容器的受限环境）
+	if sm.DetectSandbox() {
+		return EnvTypeSandbox
+	}
+
+	// 检测虚拟机
+	if sm.DetectVirtualMachine() {
+		return EnvTypeVirtualMachine
+	}
+
+	return EnvTypePhysical
+}
+
+// isContainerEnvironment 检测是否在容器环境中运行
+func isContainerEnvironment() bool {
+	switch runtime.GOOS {
+	case "linux":
+		return isContainerLinux()
+	case "windows":
+		return isContainerWindows()
+	default:
+		return false
+	}
+}
+
+// isContainerLinux 检测 Linux 容器环境
+func isContainerLinux() bool {
+	// 检查 /.dockerenv 文件（Docker 特有）
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	// 检查 cgroup 中的容器标识
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		if containsAnyLower(string(data), []string{"docker", "kubepods", "containerd", "lxc", "podman"}) {
 			return true
 		}
 	}
 
-	// 环境变量也是弱信号：仅作为补充（避免误报，不单独触发 true）
-	env := strings.ToLower(os.Getenv("container"))
-	return env != ""
+	// 检查容器相关环境变量
+	containerEnvVars := []string{
+		"KUBERNETES_SERVICE_HOST",
+		"KUBERNETES_PORT",
+		"DOCKER_CONTAINER_ID",
+		"container",
+	}
+	for _, env := range containerEnvVars {
+		if os.Getenv(env) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isContainerWindows 检测 Windows 容器环境
+func isContainerWindows() bool {
+	// 检查容器相关环境变量
+	containerEnvVars := []string{
+		"CONTAINER_ID",
+		"DOCKER_CONTAINER_ID",
+		"KUBERNETES_SERVICE_HOST",
+		"KUBERNETES_PORT",
+	}
+	for _, env := range containerEnvVars {
+		if os.Getenv(env) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func detectSandboxLinux() bool {
+	// 如果是容器环境，不视为沙箱
+	// 容器是合法的运行环境，不应被当作恶意沙箱
+	if isContainerLinux() {
+		return false
+	}
+
+	// 检测真正的沙箱特征：
+	// 1. seccomp 严格模式
+	if data, err := os.ReadFile("/proc/self/status"); err == nil {
+		// Seccomp: 2 表示严格模式（SECCOMP_MODE_FILTER）
+		if strings.Contains(string(data), "Seccomp:\t2") {
+			return true
+		}
+	}
+
+	// 2. 检查是否在 firejail 等沙箱中
+	if data, err := os.ReadFile("/proc/1/cmdline"); err == nil {
+		cmdline := strings.ToLower(string(data))
+		sandboxIndicators := []string{"firejail", "bubblewrap", "bwrap", "sandbox"}
+		for _, indicator := range sandboxIndicators {
+			if strings.Contains(cmdline, indicator) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func detectSandboxWindows() bool {
@@ -721,15 +865,30 @@ func (a *Authorizer) PerformSecurityCheck() error {
 
 	// 基础检查：调试器检测
 	if level >= SecurityLevelBasic {
-		if checkDebugger() {
-			return fmt.Errorf("security: debugger detected")
+		if checkDebuggerFn() {
+			return NewSecurityError(ErrDebuggerDetected, "debugger detected", nil)
 		}
 	}
 
 	// 高级检查：完整反逆向保护
 	if level >= SecurityLevelAdvanced {
-		if checkAdvancedDebugger() {
-			return fmt.Errorf("security: advanced debugging detected")
+		if checkAdvancedDebuggerFn() {
+			return NewSecurityError(ErrDebuggerDetected, "advanced debugging detected", nil)
+		}
+		if virtualMachineDetectorFn != nil && virtualMachineDetectorFn() {
+			return NewSecurityError(ErrVirtualMachineDetected, "virtual machine environment detected", nil)
+		}
+		if runtime.GOOS == "windows" && hardwareBreakpointDetectorFn != nil && hardwareBreakpointDetectorFn() {
+			return NewSecurityError(ErrHardwareBreakpointDetected, "hardware breakpoint detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugPortDetectorFn != nil && debugPortDetectorFn() {
+			return NewSecurityError(ErrDebugPortDetected, "debug port detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugObjectDetectorFn != nil && debugObjectDetectorFn() {
+			return NewSecurityError(ErrDebugObjectDetected, "debug object detected", nil)
+		}
+		if runtime.GOOS == "windows" && debugFlagsDetectorFn != nil && debugFlagsDetectorFn() {
+			return NewSecurityError(ErrDebugFlagsDetected, "debug flags detected", nil)
 		}
 	}
 
@@ -805,7 +964,11 @@ func (sm *SecurityManager) encryptSensitiveData(key []byte) error {
 // ProtectProcess 保护进程（简化实现）
 func (sm *SecurityManager) ProtectProcess() error {
 	if sm.level >= SecurityLevelAdvanced {
-		return sm.protectMemory()
+		if err := sm.protectMemory(); err != nil {
+			return err
+		}
+		sm.clearSensitiveData()
+		return nil
 	}
 	return nil
 }

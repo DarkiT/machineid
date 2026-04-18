@@ -63,6 +63,13 @@ func main() {
         log.Fatal(err)
     }
     fmt.Printf("受保护机器码: %s\n", protectedID)
+
+    // 获取唯一性增强机器码（默认容器唯一）
+    uniqueID, err := machineid.UniqueID("your.app.id")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("唯一性增强机器码: %s\n", uniqueID)
 }
 ```
 
@@ -105,6 +112,15 @@ if err != nil {
 }
 fmt.Printf("智能保护机器码: %s\n", protectedID)
 
+// 宿主机唯一（容器内可切换）
+hostUnique, err := machineid.UniqueIDResult("your.app.id", &machineid.UniqueIDOptions{
+    Mode: machineid.UniqueIDModeHost,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("宿主机唯一机器码: %s\n", hostUnique.Hash)
+
 // 直接获取MAC地址（可选）
 macAddr, err := machineid.GetMACAddress()
 if err != nil {
@@ -129,6 +145,8 @@ machineid.RegisterBindingProvider("disk", func(appID, machineID string) (string,
 
 当内置硬件指纹和 MAC 绑定不可用时，`ProtectedID` 会尝试自定义提供者，并在 `BindingResult` 中返回 `Mode="custom"`、`Provider="disk"` 等信息。
 
+自定义绑定提供者注册表是**进程级全局状态**。如果在测试、插件热加载或临时覆盖场景中需要管理生命周期，可以使用 `UnregisterBindingProvider(name string) bool` 移除单个提供者，或使用 `ResetBindingProviders()` 清空全部自定义提供者并恢复默认状态。
+
 ### 容器环境检测
 
 ```go
@@ -139,6 +157,70 @@ if machineid.IsContainer() {
     fmt.Println("运行在物理机或虚拟机中")
 }
 ```
+
+### Kubernetes / 云原生提示
+
+容器指纹会在检测到 Kubernetes 环境变量时自动纳入 Pod/Node 相关提示（无需访问集群 API）。
+可用变量包括：`POD_UID`、`POD_NAME`、`POD_NAMESPACE`、`NODE_NAME` 等。
+
+如需补充自定义容器 hint，可通过 `RegisterNamedContainerHintProvider(name string, provider ContainerHintProvider)` 注册具名提供者。该注册表同样为**进程级全局状态**，可使用 `UnregisterContainerHintProvider(name string) bool` 移除单个提供者，或使用 `ResetContainerHintProviders()` 清空全部自定义 hint provider，适合测试隔离和短生命周期扩展场景。
+
+容器 scoped ID 的 hint 合成策略默认保持历史行为：`ContainerHintCombineFirst`（只消费第一条非空 hint）。若需要调整底层 `ID()` 在“容器内且拿不到 containerID”场景下的进程级 fallback 行为，可调用 `SetContainerHintCombineMode(ContainerHintCombineAll)` 显式切换；该设置会自动清理 `ID()` 缓存，避免新旧策略混用。
+
+对 `ProtectedIDWithContainerAware` / `UniqueIDResult` 这类显式容器感知 API，最佳实践是通过 `ContainerBindingConfig.HintCombineMode` 按调用控制特征合成策略，而不是依赖进程级全局开关。默认 `DefaultContainerBindingConfig()` 会保持当前语义：组合全部稳定容器特征。
+
+### 容器绑定最佳实践
+
+```go
+// 推荐：显式容器感知 API 通过 ContainerBindingConfig.HintCombineMode 按调用控制语义
+combineMode := machineid.ContainerHintCombineAll
+cfg := &machineid.ContainerBindingConfig{
+    Mode:                machineid.ContainerBindingContainer,
+    PreferHostHardware:  false,
+    FallbackToContainer: true,
+    PersistentVolume:    "/var/lib/your-app",
+    HintCombineMode:     &combineMode,
+}
+
+result, err := machineid.UniqueIDResult("your.app.id", &machineid.UniqueIDOptions{
+    EnableContainer: true,
+    ContainerConfig: cfg,
+    Mode:            machineid.UniqueIDModeContainer,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("容器唯一机器码: %s (%s)\n", result.Hash, result.Provider)
+```
+
+```go
+// 推荐：对 ProtectedIDWithContainerAware 也使用显式 config，而不是依赖全局开关
+combineMode := machineid.ContainerHintCombineFirst // 兼容旧 scoped ID 语义
+cfg := machineid.DefaultContainerBindingConfig()
+cfg.Mode = machineid.ContainerBindingContainer
+cfg.PreferHostHardware = false
+cfg.HintCombineMode = &combineMode
+
+binding, err := machineid.ProtectedIDWithContainerAware("your.app.id", cfg)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("容器保护机器码: %s (%s)\n", binding.Hash, binding.Provider)
+```
+
+```go
+// 仅在需要调整底层 ID() 容器 fallback 时，才使用进程级全局开关
+if err := machineid.SetContainerHintCombineMode(machineid.ContainerHintCombineAll); err != nil {
+    log.Fatal(err)
+}
+id, err := machineid.ID()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("底层机器码: %s\n", id)
+```
+
+推荐心法：业务逻辑优先走 `ContainerBindingConfig.HintCombineMode`；只有在兼容旧代码、且确实依赖底层 `ID()` 容器 fallback 时，才触碰 `SetContainerHintCombineMode(...)` 这种进程级全局态。
 
 ## 🔧 API 参考
 
@@ -152,6 +234,18 @@ if machineid.IsContainer() {
 | `GetMACAddress()` | 获取主网卡MAC地址 | `(string, error)` |
 | `IsContainer()` | 检查是否在容器环境 | `bool` |
 | `ClearCache()` | 清除所有缓存 | `void` |
+
+### Provider / Hint 生命周期
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `UnregisterBindingProvider(name)` | 移除指定的自定义绑定提供者 | `bool` |
+| `ResetBindingProviders()` | 清空全部自定义绑定提供者并恢复默认状态 | `void` |
+| `RegisterNamedContainerHintProvider(name, provider)` | 注册具名容器 hint provider | `void` |
+| `UnregisterContainerHintProvider(name)` | 移除指定的容器 hint provider | `bool` |
+| `ResetContainerHintProviders()` | 清空全部自定义容器 hint provider | `void` |
+| `GetContainerHintCombineMode()` | 获取当前容器 scoped ID 的 hint 合成策略 | `ContainerHintCombineMode` |
+| `SetContainerHintCombineMode(mode)` | 设置容器 scoped ID 的 hint 合成策略，并自动清理 ID 缓存 | `error` |
 
 ### Info 结构体
 

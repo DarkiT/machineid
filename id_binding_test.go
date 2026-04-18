@@ -22,3 +22,32 @@ func stubIDProvider(t *testing.T, fn func() (string, error)) {
 	idProvider = fn
 	t.Cleanup(func() { idProvider = orig })
 }
+
+func resetBindingProviders(t *testing.T) {
+	t.Helper()
+	bindingProvidersMu.Lock()
+	orig := append([]bindingProvider(nil), bindingProviders...)
+	bindingProviders = nil
+	bindingProvidersMu.Unlock()
+	t.Cleanup(func() {
+		bindingProvidersMu.Lock()
+		bindingProviders = orig
+		bindingProvidersMu.Unlock()
+	})
+}
+
+func resetContainerHintProviders(t *testing.T) {
+	t.Helper()
+	containerHintProvidersMu.Lock()
+	origAnonymous := append([]ContainerHintProvider(nil), containerHintProviders...)
+	origNamed := append([]namedContainerHintProvider(nil), namedContainerHintProviders...)
+	containerHintProviders = nil
+	namedContainerHintProviders = nil
+	containerHintProvidersMu.Unlock()
+	t.Cleanup(func() {
+		containerHintProvidersMu.Lock()
+		containerHintProviders = origAnonymous
+		namedContainerHintProviders = origNamed
+		containerHintProvidersMu.Unlock()
+	})
+}

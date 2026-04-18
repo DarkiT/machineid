@@ -9,7 +9,7 @@ import (
 	"unsafe"
 )
 
-func checkDebugger() bool {
+var checkDebugger = func() bool {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	isDebuggerPresent := kernel32.NewProc("IsDebuggerPresent")
 	ret, _, _ := isDebuggerPresent.Call()

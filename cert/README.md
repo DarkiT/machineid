@@ -32,6 +32,14 @@
 - **缓存优化**：智能缓存机制提升验证性能
 - **配置管理**：灵活的配置系统支持多环境部署
 
+### 🎯 模块级授权（新增）
+
+- **模块权限控制**：按模块授权，支持启用/禁用、配额限制
+- **时间段授权**：模块级独立有效期，支持 NotBefore/NotAfter
+- **统一授权接口**：证书和 License 统一访问方式
+- **自动格式识别**：自动识别 PEM 证书或 JSON License
+- **批量模块验证**：一次验证多个模块权限
+
 ## 📦 安装
 
 ```bash
@@ -276,12 +284,29 @@ manager.StopAll()
 
 #### 监控事件类型
 
-| 事件                   | 触发条件               | 建议处理                   |
-| ---------------------- | ---------------------- | -------------------------- |
-| **WatchEventExpiring** | 距离到期时间小于预警期 | 发送续期提醒，准备新证书   |
-| **WatchEventExpired**  | 证书已过期             | 停止服务或显示过期提示     |
-| **WatchEventInvalid**  | 证书格式错误或验证失败 | 检查证书文件，联系技术支持 |
-| **WatchEventRevoked**  | 证书被加入吊销列表     | 立即停止服务，进行安全审计 |
+| 事件                   | 触发条件                   | 建议处理                           |
+| ---------------------- | -------------------------- | ---------------------------------- |
+| **WatchEventExpiring** | 距离到期时间小于预警期     | 发送续期提醒，准备新证书           |
+| **WatchEventExpired**  | 证书已过期                 | 停止服务或显示过期提示             |
+| **WatchEventInvalid**  | 证书验证失败或安全检查失败 | 根据回调 err 的 ErrorCode 定位原因 |
+| **WatchEventRevoked**  | 证书被加入吊销列表         | 立即停止服务，进行安全审计         |
+
+> 强安全提示：`WatchEventInvalid` 是“总括事件”。具体失败原因请以回调参数 `err` 为准：
+>
+> - `err` 为 `*CertError` 时，可通过 `err.ErrorCode()` 精确区分原因（例如 `CERTIFICATE_NOT_TRUSTED`、`CERTIFICATE_EXTENSION_MISSING`、`CERTIFICATE_VERSION_MISMATCH`、`INVALID_VERSION`、`UNAUTHORIZED_ACCESS`、`DEBUGGER_DETECTED` 等）。
+> - 也可通过 watcher 的 `Stats()` 获取 `last_error_type` / `last_error_code` 进行运维归因。
+
+常见错误码速查：
+
+- `MACHINE_ID_NOT_AUTHORIZED`：传入的 machineID 不在证书授权列表中
+- `VERSION_TOO_OLD`：运行版本低于证书要求的最低版本
+- `VERSION_FORMAT_INVALID`：证书内 MinClientVersion 格式非法（仅支持纯数字点分格式）
+- `VERSION_COMPARE_FAILED`：版本比较失败（通常是运行版本或证书版本格式不符合要求）
+- `INVALID_REQUEST`：签发证书时的请求参数不合法（缺字段/格式不符）
+
+兼容提示：
+
+- `INVALID_VERSION`：保留用于向后兼容；新版本中版本相关错误应优先使用更细粒度的错误码
 
 #### 默认监控配置
 
@@ -303,10 +328,13 @@ config := cert.DefaultWatchConfig()
 revokeManager, err := cert.NewRevokeManager("1.0.0")
 
 // 吊销特定证书
-err = revokeManager.RevokeCertificate("证书序列号", "security_breach")
+revokeManager.AddRevocation("证书序列号", "security_breach")
 
 // 检查证书是否被吊销
 isRevoked, reason := revokeManager.IsRevoked("证书序列号")
+
+// 移除吊销记录
+revokeManager.RemoveRevocation("证书序列号")
 
 // 使用动态吊销列表
 auth, err := cert.NewAuthorizer().
@@ -322,6 +350,416 @@ auth, err := cert.NewAuthorizer().
     Build()
 ```
 
+#### 吊销列表自动更新
+
+```go
+// 创建带更新函数的吊销管理器
+revokeManager, err := cert.NewRevokeManager("1.0.0",
+    cert.WithRevokeListUpdater(func() ([]byte, error) {
+        resp, err := http.Get("https://api.example.com/revoke-list")
+        if err != nil {
+            return nil, err
+        }
+        defer resp.Body.Close()
+        return io.ReadAll(resp.Body)
+    }),
+)
+
+// 配置自动更新
+config := &cert.AutoUpdateConfig{
+    Interval:      time.Hour,           // 更新间隔
+    RetryInterval: 5 * time.Minute,     // 重试间隔
+    MaxRetries:    3,                   // 最大重试次数
+    OnUpdate: func(oldTime, newTime time.Time, err error) {
+        if err != nil {
+            log.Printf("吊销列表更新失败: %v", err)
+        } else {
+            log.Printf("吊销列表已更新: %v -> %v", oldTime, newTime)
+        }
+    },
+}
+
+// 启动自动更新
+err = revokeManager.StartAutoUpdate(config)
+
+// 检查自动更新状态
+if revokeManager.IsAutoUpdateRunning() {
+    log.Println("自动更新正在运行")
+}
+
+// 手动触发更新
+err = revokeManager.UpdateRevokeList()
+
+// 停止自动更新
+revokeManager.StopAutoUpdate()
+```
+
+### 8. 环境检测
+
+系统提供智能环境检测，可区分物理机、虚拟机、容器和沙箱环境：
+
+```go
+// 创建安全管理器
+sm := cert.NewSecurityManager(cert.SecurityLevelAdvanced)
+defer sm.Close()
+
+// 检测当前运行环境
+envType := sm.DetectEnvironment()
+
+switch envType {
+case cert.EnvTypePhysical:
+    log.Println("运行在物理机上")
+case cert.EnvTypeVM:
+    log.Println("运行在虚拟机中")
+case cert.EnvTypeContainer:
+    log.Println("运行在容器中")
+case cert.EnvTypeSandbox:
+    log.Println("运行在沙箱环境中")
+}
+
+// 执行安全检查（自动区分容器和沙箱）
+if err := sm.Check(); err != nil {
+    log.Printf("安全检查失败: %v", err)
+}
+```
+
+#### 环境类型说明
+
+| 环境类型 | 说明 | 安全检查行为 |
+|----------|------|--------------|
+| `EnvTypePhysical` | 物理机 | 正常检查 |
+| `EnvTypeVM` | 虚拟机（VMware、VirtualBox 等） | 级别 2+ 时警告 |
+| `EnvTypeContainer` | 容器（Docker、K8s、Containerd） | **不触发沙箱警告** |
+| `EnvTypeSandbox` | 沙箱（Cuckoo、Joe Sandbox 等） | 级别 2+ 时拒绝 |
+
+### 9. 模块级授权
+
+系统支持按模块进行细粒度授权控制，适用于需要分模块销售或按功能授权的场景。
+
+#### 签发带模块授权的证书
+
+```go
+// 构建带模块授权的证书请求
+req, err := cert.NewClientRequest().
+    WithMachineID(machineID).
+    WithExpiry(time.Now().AddDate(1, 0, 0)).
+    WithCompany("示例公司", "研发部").
+    WithMinClientVersion("2.0.0").
+    WithValidityDays(365).
+    // 配置模块授权
+    WithModules(
+        cert.Module("report").WithQuota(100),           // 报表模块，配额100
+        cert.Module("export").Enabled(),                 // 导出模块，启用
+        cert.Module("api").Disabled(),                   // API模块，禁用
+        cert.Module("premium").ValidFor(180),            // 高级功能，180天有效
+        cert.Module("trial").ValidBetween(start, end),   // 试用功能，指定时间段
+    ).
+    Build()
+
+// 签发证书
+certificate, err := auth.IssueClientCert(req)
+```
+
+#### 模块配置选项
+
+| 方法 | 说明 | 示例 |
+|------|------|------|
+| `Module(name)` | 创建模块配置（默认启用） | `Module("report")` |
+| `.Enabled()` | 显式启用模块 | `Module("export").Enabled()` |
+| `.Disabled()` | 禁用模块 | `Module("api").Disabled()` |
+| `.WithQuota(n)` | 设置配额限制 | `Module("report").WithQuota(100)` |
+| `.ValidFor(days)` | 设置有效天数 | `Module("trial").ValidFor(30)` |
+| `.ValidFrom(time)` | 设置生效时间 | `Module("feature").ValidFrom(startTime)` |
+| `.ValidUntil(time)` | 设置过期时间 | `Module("promo").ValidUntil(endTime)` |
+| `.ValidBetween(from, to)` | 设置有效期范围 | `Module("event").ValidBetween(start, end)` |
+| `.WithExtra(data)` | 附加扩展数据 | `Module("custom").WithExtra(`{"key":"value"}`)` |
+
+#### 验证模块权限
+
+```go
+// 方式1: 简单检查模块是否启用
+has, err := auth.HasModule(certPEM, "report")
+if err != nil {
+    log.Fatal(err)
+}
+if !has {
+    log.Println("无报表模块权限")
+}
+
+// 方式2: 获取模块配额
+quota, err := auth.GetModuleQuota(certPEM, "report")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("报表配额: %d\n", quota) // 0 表示无限制
+
+// 方式3: 完整模块验证（权限+时间）
+err = auth.ValidateModule(certPEM, "report", machineID)
+if err != nil {
+    if certErr, ok := err.(*cert.CertError); ok {
+        switch certErr.Code {
+        case cert.ErrModuleNotAuthorized:
+            log.Println("模块未授权")
+        case cert.ErrModuleExpired:
+            log.Println("模块授权已过期")
+        }
+    }
+}
+
+// 方式4: 批量验证多个模块
+requiredModules := []string{"report", "export"}
+err = auth.ValidateModules(certPEM, machineID, requiredModules)
+if err != nil {
+    log.Printf("模块验证失败: %v", err)
+}
+```
+
+#### 提取模块权限信息
+
+```go
+// 提取所有模块权限
+features, err := auth.ExtractModules(certPEM)
+if err != nil {
+    log.Fatal(err)
+}
+
+if features != nil {
+    for _, module := range features.Modules {
+        fmt.Printf("模块: %s, 启用: %t, 配额: %d\n",
+            module.Name, module.Enabled, module.Quota)
+        if module.NotAfter > 0 {
+            fmt.Printf("  过期时间: %s\n",
+                time.Unix(module.NotAfter, 0).Format("2006-01-02"))
+        }
+    }
+}
+
+// 通过 ClientInfo 获取模块权限
+clientInfo, err := auth.ExtractClientInfo(certPEM)
+if clientInfo.Features != nil {
+    if clientInfo.Features.HasModule("report") {
+        fmt.Println("有报表模块权限")
+    }
+}
+```
+
+### 10. 统一授权接口
+
+系统提供统一的 `Authorization` 接口，支持证书和 License 的多态访问，简化授权验证逻辑。
+
+#### Authorization 接口
+
+```go
+// Authorization 统一授权接口
+type Authorization interface {
+    Type() AuthorizationType           // 返回授权类型（certificate/license）
+    Validate(machineID string) error   // 验证授权
+    HasModule(name string) bool        // 检查模块权限
+    GetModuleQuota(name string) int    // 获取模块配额
+    ValidateModule(name string) error  // 验证模块（权限+时间）
+    GetMeta(key string) string         // 获取元数据
+    ExpiresAt() time.Time              // 返回过期时间
+    MachineIDs() []string              // 返回授权的机器码列表
+}
+```
+
+#### 自动识别授权格式
+
+```go
+// ParseAuthorization 自动识别并解析授权数据
+// 支持 PEM 格式证书和 JSON 格式 License
+authorization, err := auth.ParseAuthorization(data, publicKey)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 根据类型处理
+switch authorization.Type() {
+case cert.AuthTypeCertificate:
+    fmt.Println("证书授权")
+case cert.AuthTypeLicense:
+    fmt.Println("License 授权")
+}
+
+// 统一访问方式
+fmt.Printf("过期时间: %s\n", authorization.ExpiresAt().Format("2006-01-02"))
+fmt.Printf("机器码: %v\n", authorization.MachineIDs())
+
+if authorization.HasModule("report") {
+    quota := authorization.GetModuleQuota("report")
+    fmt.Printf("报表模块配额: %d\n", quota)
+}
+```
+
+#### 批量模块验证
+
+```go
+// ValidateWithModules 一次验证基础授权和多个模块
+requiredModules := []string{"report", "export", "api"}
+err := auth.ValidateWithModules(data, machineID, requiredModules, publicKey)
+if err != nil {
+    log.Printf("授权验证失败: %v", err)
+}
+```
+
+#### 证书授权实现
+
+```go
+// 从证书创建授权对象
+certAuth, err := cert.NewCertAuthorization(certPEM, auth)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 使用授权对象
+fmt.Printf("类型: %s\n", certAuth.Type())           // "certificate"
+fmt.Printf("过期: %s\n", certAuth.ExpiresAt())
+fmt.Printf("有报表权限: %t\n", certAuth.HasModule("report"))
+
+// 获取底层证书（如需要）
+x509Cert := certAuth.Certificate()
+features := certAuth.Features()
+```
+
+#### License 授权实现
+
+```go
+// 验证 License 并创建授权对象
+payload, err := cert.ValidateLicenseJSON(licenseJSON, publicKey, machineID, time.Now())
+if err != nil {
+    log.Fatal(err)
+}
+
+licAuth := cert.NewLicenseAuthorization(payload, publicKey)
+
+// 使用授权对象
+fmt.Printf("类型: %s\n", licAuth.Type())            // "license"
+fmt.Printf("过期: %s\n", licAuth.ExpiresAt())
+fmt.Printf("有报表权限: %t\n", licAuth.HasModule("report"))
+
+// License 特有功能
+if licAuth.HasFeature("tier") {
+    tier, _ := licAuth.GetFeatureValue("tier")
+    fmt.Printf("授权等级: %v\n", tier)
+}
+
+// 获取元数据
+customer := licAuth.GetMeta("customer")
+fmt.Printf("客户: %s\n", customer)
+```
+
+#### 多态使用示例
+
+```go
+// 统一处理不同类型的授权
+func checkAuthorization(authorization cert.Authorization, machineID string) error {
+    // 基础验证
+    if err := authorization.Validate(machineID); err != nil {
+        return fmt.Errorf("授权验证失败: %w", err)
+    }
+
+    // 检查过期时间
+    if time.Until(authorization.ExpiresAt()) < 7*24*time.Hour {
+        log.Println("警告: 授权即将过期")
+    }
+
+    // 验证必需模块
+    requiredModules := []string{"core", "report"}
+    for _, module := range requiredModules {
+        if err := authorization.ValidateModule(module); err != nil {
+            return fmt.Errorf("模块 %s 验证失败: %w", module, err)
+        }
+    }
+
+    return nil
+}
+
+// 使用示例
+certAuth, _ := cert.NewCertAuthorization(certPEM, auth)
+licAuth := cert.NewLicenseAuthorization(payload, publicKey)
+
+// 多态调用
+checkAuthorization(certAuth, machineID)
+checkAuthorization(licAuth, machineID)
+```
+
+### 11. License 模块授权
+
+License 同样支持模块级授权，通过 Features 字段配置：
+
+#### 签发带模块的 License
+
+```go
+payload := cert.LicensePayload{
+    LicenseID: "LIC-001",
+    MachineID: machineID,
+    NotAfter:  time.Now().AddDate(1, 0, 0),
+    Features: map[string]any{
+        "modules": map[string]any{
+            "report": map[string]any{
+                "enabled": true,
+                "quota":   100,
+            },
+            "export": map[string]any{
+                "enabled":   true,
+                "not_after": "2025-12-31",
+            },
+            "api": map[string]any{
+                "enabled": false,
+            },
+        },
+        "tier": "enterprise",
+        "max_users": 50,
+    },
+    Meta: map[string]string{
+        "customer": "Acme Corp",
+        "plan":     "enterprise",
+    },
+}
+
+licenseJSON, err := cert.IssueLicense(payload, privateKey)
+```
+
+#### 验证 License 模块
+
+```go
+// 验证 License
+payload, err := cert.ValidateLicenseJSON(licenseJSON, publicKey, machineID, time.Now())
+if err != nil {
+    log.Fatal(err)
+}
+
+// 检查功能
+if payload.HasFeature("modules.report.enabled") {
+    fmt.Println("有报表模块权限")
+}
+
+// 获取功能值
+if tier, ok := payload.GetFeatureValue("tier"); ok {
+    fmt.Printf("授权等级: %v\n", tier)
+}
+
+// 获取模块配置
+if config, ok := payload.GetModuleConfig("report"); ok {
+    fmt.Printf("模块: %s, 启用: %t, 配额: %d\n",
+        config.Name, config.Enabled, config.Quota)
+}
+
+// 验证模块访问权限
+err = payload.ValidateModuleAccess("report", time.Now())
+if err != nil {
+    log.Printf("模块访问验证失败: %v", err)
+}
+```
+
+#### 模块错误码
+
+| 错误码 | 说明 |
+|--------|------|
+| `ErrModuleNotAuthorized` | 模块未授权或已禁用 |
+| `ErrModuleExpired` | 模块授权已过期或未生效 |
+| `ErrModuleQuotaExceeded` | 模块配额已用尽 |
+
 ## 🛡️ 安全级别系统
 
 ### 安全级别概览
@@ -331,8 +769,8 @@ auth, err := cert.NewAuthorizer().
 | 级别  | 名称     | 检测项              | 性能影响 | 适用场景               |
 | ----- | -------- | ------------------- | -------- | ---------------------- |
 | **0** | **禁用** | 无检测              | 无       | **开发、调试（默认）** |
-| **1** | **基础** | 简单调试器检测      | 极小     | **生产环境**           |
-| **2** | **高级** | 完整反逆向保护      | 小       | **高价值软件**         |
+| **1** | **基础** | 简单调试器检测      | 极小     | **测试环境**           |
+| **2** | **高级** | 完整反逆向保护      | 小       | **生产环境（推荐）**   |
 | **3** | **关键** | 最严格检查+进程保护 | 中等     | **关键系统**           |
 
 ### 配置方式
@@ -340,7 +778,7 @@ auth, err := cert.NewAuthorizer().
 ```go
 // 方式1: 使用预设配置
 devAuth := cert.ForDevelopment().Build()    // 级别0 (默认)
-prodAuth := cert.ForProduction().Build()    // 级别1
+prodAuth := cert.ForProduction().Build()    // 级别2 (高级安全)
 testAuth := cert.ForTesting().Build()       // 级别0
 
 // 方式2: 显式设置安全级别
@@ -429,8 +867,6 @@ auth := cert.NewAuthorizer().WithSecurityLevel(0).Build()
 #### 🛡️ 级别 1 - 基础防护
 
 ```go
-auth := cert.ForProduction().Build() // 自动设为级别1
-// 或手动设置
 auth := cert.NewAuthorizer().WithBasicSecurity().Build()
 ```
 
@@ -439,6 +875,11 @@ auth := cert.NewAuthorizer().WithBasicSecurity().Build()
 - `IsDebuggerPresent()` - 检测调试器存在
 - PEB 结构检查 - 验证`BeingDebugged`标志
 - 调试堆检测 - 检查堆标志异常
+- 硬件断点检测 - 读取调试寄存器 DR0-DR3（Windows x86/x64）
+- 硬件断点状态寄存器 - DR6/DR7 非零时同样视为可疑（Windows x86/x64）
+- 调试端口检查 - 通过 NtQueryInformationProcess(ProcessDebugPort) 检测调试端口
+- 调试对象检查 - 通过 NtQueryInformationProcess(ProcessDebugObjectHandle) 检测调试对象
+- 调试标志检查 - 通过 NtQueryInformationProcess(ProcessDebugFlags) 检测调试标志
 
 **Linux 平台检测**：
 
@@ -455,12 +896,15 @@ auth := cert.NewAuthorizer().WithBasicSecurity().Build()
 #### 🛡️ 级别 2 - 高级防护
 
 ```go
+auth := cert.ForProduction().Build() // 生产环境默认级别2
+// 或手动设置
 auth := cert.NewAuthorizer().WithSecureDefaults().Build()
 ```
 
 **高级反调试技术**：
 
 - **时间差攻击检测** - 测量指令执行时间，检测单步调试
+- **系统调用/跟踪检测** - Linux 下通过 TracerPid 检测 ptrace/strace 跟踪
 - **调试端口检查** - 通过`NtQueryInformationProcess`检查调试端口（Windows）
 - **异常处理检测** - 利用异常处理机制检测调试器
 - **硬件断点检测** - 检查调试寄存器`DR0-DR7`
@@ -543,6 +987,10 @@ auth := cert.NewAuthorizer().WithCriticalSecurity().Build()
 - **Hyper-V**: 检测 Microsoft 虚拟化标志
 - **QEMU**: 检查 QEMU/KVM 环境特征
 
+实现说明：
+
+- 当前实现已在安全检查链路中加入虚拟机检测（安全级别 2+），触发时返回错误码 `VIRTUAL_MACHINE_DETECTED`。
+
 #### 沙箱检测
 
 - **Cuckoo Sandbox**: 检测 Cuckoo 特有的文件和环境
@@ -605,21 +1053,20 @@ auth := cert.NewAuthorizer().
     Build()
 ```
 
-### 配置文件支持
+### Builder 配置方式
 
-```yaml
-# config.yaml
-version: "2.0.0"
-enterprise_id: 62996
-security:
-  enable_anti_debug: true
-  enable_time_validation: true
-  require_hardware_binding: true
-  max_clock_skew: "5m"
-cache:
-  ttl: "10m"
-  max_size: 5000
-  cleanup_interval: "30m"
+`cert` 核心包只保留内存配置模型和 Builder API，不再承担配置文件读取、保存、默认模板生成或搜索路径约定。  
+如需 YAML / JSON / env / flags 配置，请由上层应用自行解析后，再映射到 `AuthorizerBuilder`：
+
+```go
+auth := cert.NewAuthorizer().
+    WithRuntimeVersion("2.0.0").
+    WithSecurityLevel(2).
+    EnableTimeValidation(true).
+    WithMaxClockSkew(5 * time.Minute).
+    WithCacheTTL(10 * time.Minute).
+    WithCacheSize(5000).
+    Build()
 ```
 
 ## 🔧 高级功能
@@ -641,6 +1088,8 @@ validationResults := batchManager.ValidateMultipleCerts(validations)
 
 ### 缓存优化
 
+系统使用 **O(1) 时间复杂度的 LRU 缓存**，基于双向链表实现高效驱逐：
+
 ```go
 // 方式1：通过 Builder 创建带缓存的授权管理器
 cachedAuth, err := cert.NewAuthorizer().
@@ -660,11 +1109,19 @@ err := cachedAuth.ValidateCert(certPEM, machineID)
 
 // 查看缓存统计
 stats := cachedAuth.CacheStats()
+fmt.Printf("命中: %d, 未命中: %d, 驱逐: %d\n", stats.Hits, stats.Misses, stats.Evicted)
 fmt.Printf("命中率: %.2f%%\n", cachedAuth.CacheHitRate()*100)
 
 // 清空缓存
 cachedAuth.ClearCache()
 ```
+
+#### 缓存特性
+
+- **O(1) LRU 驱逐**：使用双向链表实现，大缓存时性能稳定
+- **并发安全**：读写锁保护，支持高并发访问
+- **自动清理**：后台协程定期清理过期条目
+- **统计信息**：命中/未命中/驱逐计数，便于监控
 
 ### 模板系统
 
@@ -813,6 +1270,12 @@ auth := cert.ForProduction().
     Build()
 ```
 
+> ⚠️ **生产交付约定**
+>
+> - `UseDefaultCA()` / 内置 `defaultCACert` / `defaultCAKey` 仅用于开发、测试和兜底兼容，不应作为生产根 CA 长期使用。
+> - 生产环境必须显式通过 `WithCA(prodCACert, prodCAKey)` 注入独立 CA，或先调用 `GenerateCA()` 生成后再持久化加载。
+> - 安全扫描若命中内置 CA 私钥，应按“兜底资产”解释，不应误判为生产密钥泄露；前提是生产部署已显式替换。
+
 ## ⚠️ 重要安全说明
 
 ### CA 私钥保护
@@ -868,11 +1331,11 @@ if err := auth.PerformSecurityCheck(); err != nil {
 
 - [GoDoc](https://pkg.go.dev/github.com/darkit/machineid/cert)
 - [示例代码](./examples.go)
-- [配置参考](./config.go)
+- [授权器配置与 Builder](./authorizer.go)
 
 ## 🔄 版本兼容性
 
-- **Go 版本**: 需要 Go 1.19+
+- **Go 版本**: 需要 Go 1.24+
 - **平台支持**: Windows, Linux, macOS
 - **架构支持**: amd64, arm64, 386
 

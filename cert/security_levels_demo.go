@@ -52,46 +52,46 @@ func DemoSecurityLevels() {
 	fmt.Println("   - 高价值软件: 级别 2 或 3")
 }
 
-// DemoSecurityConfiguration 演示不同配置方式
-func DemoSecurityConfiguration() {
-	fmt.Println("\n=== 安全配置方式演示 ===")
+// DemoSecuritySetupPatterns 演示不同安全能力接入方式
+func DemoSecuritySetupPatterns() {
+	fmt.Println("\n=== 安全能力接入方式演示 ===")
 
 	// 方式1: 使用预设配置
 	fmt.Println("📋 方式1: 使用预设配置")
 
 	fmt.Println("   开发环境:")
 	devAuth, _ := ForDevelopment().Build()
-	printSecurityConfig(devAuth)
+	printSecurityProfile(devAuth)
 
 	fmt.Println("   生产环境:")
 	prodAuth, _ := ForProduction().Build()
-	printSecurityConfig(prodAuth)
+	printSecurityProfile(prodAuth)
 
 	// 方式2: 显式设置安全级别
 	fmt.Println("📋 方式2: 显式设置安全级别")
 
 	fmt.Println("   禁用安全检查:")
 	disabledAuth, _ := NewAuthorizer().DisableSecurity().Build()
-	printSecurityConfig(disabledAuth)
+	printSecurityProfile(disabledAuth)
 
 	fmt.Println("   高级安全配置:")
 	advancedAuth, _ := NewAuthorizer().WithSecurityLevel(2).Build()
-	printSecurityConfig(advancedAuth)
+	printSecurityProfile(advancedAuth)
 
 	// 方式3: 便捷配置方法
 	fmt.Println("📋 方式3: 便捷配置方法")
 
 	fmt.Println("   宽松安全配置:")
 	relaxedAuth, _ := NewAuthorizer().WithRelaxedSecurity().Build()
-	printSecurityConfig(relaxedAuth)
+	printSecurityProfile(relaxedAuth)
 
 	fmt.Println("   关键安全配置:")
 	criticalAuth, _ := NewAuthorizer().WithCriticalSecurity().Build()
-	printSecurityConfig(criticalAuth)
+	printSecurityProfile(criticalAuth)
 }
 
-// printSecurityConfig 打印安全配置信息
-func printSecurityConfig(auth *Authorizer) {
+// printSecurityProfile 打印安全能力画像
+func printSecurityProfile(auth *Authorizer) {
 	level := auth.GetSecurityLevel()
 	config := auth.Config()
 
@@ -197,7 +197,7 @@ func RunSecurityDemo() {
 	log.Println("开始安全功能演示...")
 
 	DemoSecurityLevels()
-	DemoSecurityConfiguration()
+	DemoSecuritySetupPatterns()
 	DemoSecurityCheck()
 	ShowUsageExamples()
 

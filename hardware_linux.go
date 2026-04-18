@@ -15,16 +15,10 @@ import (
 	"time"
 )
 
-// HardwareWeight 硬件信息权重
-type HardwareWeight struct {
-	Name   string
-	Value  string
-	Weight int
-}
-
 // linuxHardwareInfo Linux平台简化硬件信息
 type linuxHardwareInfo struct {
 	ProductUUID       string   `json:"product_uuid,omitempty"`
+	SystemUUID        string   `json:"system_uuid,omitempty"`
 	BoardSerial       string   `json:"board_serial,omitempty"`
 	ProductSerial     string   `json:"product_serial,omitempty"`
 	SystemVendor      string   `json:"system_vendor,omitempty"`
@@ -32,6 +26,8 @@ type linuxHardwareInfo struct {
 	BoardVendor       string   `json:"board_vendor,omitempty"`
 	RootPartitionUUID string   `json:"root_partition_uuid,omitempty"`
 	DiskSerials       []string `json:"disk_serials,omitempty"`
+	NVMeSerials       []string `json:"nvme_serials,omitempty"`
+	CPUIdentifier     string   `json:"cpu_identifier,omitempty"`
 	CPUSignature      string   `json:"cpu_signature,omitempty"`
 	CPUCores          int      `json:"cpu_cores,omitempty"`
 	MACAddresses      []string `json:"mac_addresses,omitempty"`
@@ -39,11 +35,17 @@ type linuxHardwareInfo struct {
 	PCIDevices        []string `json:"pci_devices,omitempty"`
 	MachineID         string   `json:"machine_id,omitempty"`
 	Hostname          string   `json:"hostname,omitempty"`
+	BIOSVersion       string   `json:"bios_version,omitempty"`
 
 	// Linux 硬件增强信息（新增字段；保持对现有字段的向后兼容）
 	UEFIVariables []string `json:"uefi_variables,omitempty"`
 	TPMVersion    string   `json:"tpm_version,omitempty"`
 	ACPITables    []string `json:"acpi_tables,omitempty"`
+
+	// B1 扩展字段：增强硬件特征
+	ChassisSerial   string   `json:"chassis_serial,omitempty"`    // 机箱序列号
+	NICPCIAddresses []string `json:"nic_pci_addresses,omitempty"` // 网卡 PCI 地址
+	USBControllers  []string `json:"usb_controllers,omitempty"`   // USB 控制器 ID
 }
 
 var (
@@ -103,6 +105,12 @@ func GetHardwareInfo() (*linuxHardwareInfo, error) {
 
 	// 获取ACPI/SMBIOS表信息（用于补充主机级固件特征）
 	getACPIInfo(info)
+
+	// B1: 获取网卡 PCI 地址
+	getNICPCIAddresses(info)
+
+	// B1: 获取 USB 控制器信息
+	getUSBControllers(info)
 
 	cachedHardware = info
 	hardwareCacheTime = time.Now()
@@ -237,12 +245,18 @@ func getDMIInfo(info *linuxHardwareInfo) {
 		"sys_vendor":     &info.SystemVendor,
 		"product_name":   &info.ProductName,
 		"board_vendor":   &info.BoardVendor,
+		"bios_version":   &info.BIOSVersion,
+		"chassis_serial": &info.ChassisSerial, // B1: 机箱序列号
 	}
 
 	for file, field := range dmiFields {
 		if data, err := readFileString(filepath.Join(dmiBasePath, file)); err == nil {
 			*field = strings.TrimSpace(data)
 		}
+	}
+
+	if info.SystemUUID == "" {
+		info.SystemUUID = info.ProductUUID
 	}
 }
 
@@ -267,6 +281,9 @@ func getStorageInfo(info *linuxHardwareInfo) {
 	if diskSerials := getDiskSerials(); len(diskSerials) > 0 {
 		info.DiskSerials = diskSerials
 	}
+	if nvmeSerials := getNVMeSerials(); len(nvmeSerials) > 0 {
+		info.NVMeSerials = nvmeSerials
+	}
 }
 
 // getCPUInfo 获取CPU信息
@@ -280,6 +297,13 @@ func getCPUInfo(info *linuxHardwareInfo) {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "processor") {
 				coreCount++
+			} else if strings.HasPrefix(line, "Serial") {
+				if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
+					serial := strings.TrimSpace(parts[1])
+					if serial != "" {
+						info.CPUIdentifier = serial
+					}
+				}
 			} else if strings.HasPrefix(line, "cpu family") ||
 				strings.HasPrefix(line, "model") ||
 				strings.HasPrefix(line, "stepping") ||
@@ -428,71 +452,111 @@ func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
 // collectHardwareWeights 收集硬件权重信息
 func collectHardwareWeights(info *linuxHardwareInfo) []HardwareWeight {
 	var weights []HardwareWeight
+	seen := make(map[string]struct{})
+	add := func(name, value string, weight int) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[name+":"+value]; ok {
+			return
+		}
+		seen[name+":"+value] = struct{}{}
+		weights = append(weights, HardwareWeight{name, value, weight})
+	}
 
 	// UEFI / TPM（固件/安全模块，优先于软件特征）
 	// 注意：这里的权重代表“稳定/不可伪造程度”，应高于 machine-id/hostname 等软件特征。
 	if len(info.UEFIVariables) > 0 {
 		// 为了避免变量名列表过长，指纹权重侧只取一个摘要值
 		sum := sha256.Sum256([]byte(strings.Join(info.UEFIVariables, ",")))
-		weights = append(weights, HardwareWeight{"uefi_vars", fmt.Sprintf("%x", sum[:16]), 100})
+		add("uefi_vars", fmt.Sprintf("%x", sum[:16]), 100)
 	}
 	if info.TPMVersion != "" {
-		weights = append(weights, HardwareWeight{"tpm", info.TPMVersion, 95})
+		add("tpm", info.TPMVersion, 95)
 	}
 	if len(info.ACPITables) > 0 {
 		// ACPI 表名可作为固件侧的补充特征，权重略低于 TPM
 		sum := sha256.Sum256([]byte(strings.Join(info.ACPITables, ",")))
-		weights = append(weights, HardwareWeight{"acpi_tables", fmt.Sprintf("%x", sum[:16]), 92})
+		add("acpi_tables", fmt.Sprintf("%x", sum[:16]), 92)
 	}
 
 	// DMI信息（高权重）
 	if info.ProductUUID != "" && info.ProductUUID != "00000000-0000-0000-0000-000000000000" {
-		weights = append(weights, HardwareWeight{"product_uuid", info.ProductUUID, 100})
+		add("product_uuid", info.ProductUUID, 100)
+	}
+	if info.SystemUUID != "" && info.SystemUUID != info.ProductUUID && info.SystemUUID != "00000000-0000-0000-0000-000000000000" {
+		add("system_uuid", info.SystemUUID, 95)
 	}
 	if info.BoardSerial != "" && info.BoardSerial != "None" && info.BoardSerial != "To be filled by O.E.M." {
-		weights = append(weights, HardwareWeight{"board_serial", info.BoardSerial, 90})
+		add("board_serial", info.BoardSerial, 90)
 	}
 	if info.ProductSerial != "" && info.ProductSerial != "None" && info.ProductSerial != "To be filled by O.E.M." {
-		weights = append(weights, HardwareWeight{"product_serial", info.ProductSerial, 85})
+		add("product_serial", info.ProductSerial, 85)
+	}
+	// B1: 机箱序列号（权重略低于产品序列号）
+	if info.ChassisSerial != "" && info.ChassisSerial != "None" && info.ChassisSerial != "To be filled by O.E.M." {
+		add("chassis_serial", info.ChassisSerial, 83)
+	}
+	if info.BIOSVersion != "" && info.BIOSVersion != "None" {
+		add("bios_version", info.BIOSVersion, 40)
 	}
 
 	// 存储信息（高权重）
 	if info.RootPartitionUUID != "" {
-		weights = append(weights, HardwareWeight{"root_uuid", info.RootPartitionUUID, 80})
+		add("root_uuid", info.RootPartitionUUID, 80)
 	}
 	if len(info.DiskSerials) > 0 {
 		// 使用第一个磁盘序列号
-		weights = append(weights, HardwareWeight{"disk_serial", info.DiskSerials[0], 75})
+		add("disk_serial", info.DiskSerials[0], 75)
+	}
+	if len(info.NVMeSerials) > 0 {
+		add("nvme_serial", info.NVMeSerials[0], 78)
 	}
 
 	// CPU信息（中等权重）
+	if info.CPUIdentifier != "" {
+		add("cpu_id", info.CPUIdentifier, 70)
+	}
 	if info.CPUSignature != "" {
-		weights = append(weights, HardwareWeight{"cpu_signature", info.CPUSignature, 60})
+		add("cpu_signature", info.CPUSignature, 60)
 	}
 
 	// 系统信息（中等权重）
 	if info.SystemVendor != "" && info.ProductName != "" {
 		systemInfo := info.SystemVendor + ":" + info.ProductName
-		weights = append(weights, HardwareWeight{"system_info", systemInfo, 50})
+		add("system_info", systemInfo, 50)
 	}
 
 	// 内存大小（低权重）
 	if info.MemorySize > 0 {
-		weights = append(weights, HardwareWeight{"memory_size", fmt.Sprintf("%d", info.MemorySize), 40})
+		add("memory_size", fmt.Sprintf("%d", info.MemorySize), 40)
 	}
 
 	// MAC地址（最低权重）
 	if len(info.MACAddresses) > 0 {
 		// 使用第一个MAC地址
-		weights = append(weights, HardwareWeight{"mac_address", info.MACAddresses[0], 30})
+		add("mac_address", info.MACAddresses[0], 30)
+	}
+
+	// B1: 网卡 PCI 地址（中等权重，比 MAC 更稳定）
+	if len(info.NICPCIAddresses) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(info.NICPCIAddresses, ",")))
+		add("nic_pci", fmt.Sprintf("%x", sum[:16]), 65)
+	}
+
+	// B1: USB 控制器（低权重，作为辅助特征）
+	if len(info.USBControllers) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(info.USBControllers, ",")))
+		add("usb_controllers", fmt.Sprintf("%x", sum[:16]), 50)
 	}
 
 	// 软指纹（低-中权重）
 	if info.MachineID != "" {
-		weights = append(weights, HardwareWeight{"machine_id", info.MachineID, 60})
+		add("machine_id", info.MachineID, 60)
 	}
 	if info.Hostname != "" {
-		weights = append(weights, HardwareWeight{"hostname", info.Hostname, 20})
+		add("hostname", info.Hostname, 20)
 	}
 
 	return weights
@@ -598,6 +662,26 @@ func getDiskSerials() []string {
 	return serials
 }
 
+func getNVMeSerials() []string {
+	var serials []string
+	nvmePath := "/sys/class/nvme"
+	entries, err := os.ReadDir(nvmePath)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		serialPath := filepath.Join(nvmePath, entry.Name(), "serial")
+		if serial, err := readFileString(serialPath); err == nil && serial != "" {
+			serials = append(serials, serial)
+		}
+	}
+	sort.Strings(serials)
+	return serials
+}
+
 func getNetworkInterfaces() ([]string, error) {
 	var addresses []string
 
@@ -624,4 +708,83 @@ func ClearHardwareCache() {
 
 	cachedHardware = nil
 	hardwareCacheTime = time.Time{}
+}
+
+// getNICPCIAddresses 获取网卡 PCI 地址
+//
+// 用途说明：
+//   - 网卡 PCI 地址是硬件拓扑的一部分，比 MAC 地址更稳定
+//   - 在物理机上通常不会变化，除非更换网卡或主板
+//   - 在虚拟机/容器中可能不可用或为虚拟地址
+func getNICPCIAddresses(info *linuxHardwareInfo) {
+	netPath := "/sys/class/net"
+	entries, err := os.ReadDir(netPath)
+	if err != nil {
+		return
+	}
+
+	var pciAddrs []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "lo" {
+			continue
+		}
+
+		// 读取设备的 PCI 地址
+		devicePath := filepath.Join(netPath, name, "device")
+		linkTarget, err := os.Readlink(devicePath)
+		if err != nil {
+			continue
+		}
+
+		// 提取 PCI 地址（格式如 0000:00:1f.6）
+		pciAddr := filepath.Base(linkTarget)
+		if pciAddr != "" && strings.Contains(pciAddr, ":") {
+			pciAddrs = append(pciAddrs, pciAddr)
+		}
+	}
+
+	if len(pciAddrs) > 0 {
+		sort.Strings(pciAddrs)
+		info.NICPCIAddresses = uniqStrings(pciAddrs)
+	}
+}
+
+// getUSBControllers 获取 USB 控制器信息
+//
+// 用途说明：
+//   - USB 控制器的 Vendor:Product ID 是硬件特征
+//   - 在物理机上通常稳定，除非更换主板
+//   - 权重较低，作为辅助特征
+func getUSBControllers(info *linuxHardwareInfo) {
+	usbPath := "/sys/bus/usb/devices"
+	entries, err := os.ReadDir(usbPath)
+	if err != nil {
+		return
+	}
+
+	var controllers []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// USB 控制器通常是 usb1, usb2 等，或者根 hub 设备
+		if !strings.HasPrefix(name, "usb") {
+			continue
+		}
+
+		devicePath := filepath.Join(usbPath, name)
+		vendorPath := filepath.Join(devicePath, "idVendor")
+		productPath := filepath.Join(devicePath, "idProduct")
+
+		vendor, vendorErr := readFileString(vendorPath)
+		product, productErr := readFileString(productPath)
+
+		if vendorErr == nil && productErr == nil && vendor != "" && product != "" {
+			controllers = append(controllers, vendor+":"+product)
+		}
+	}
+
+	if len(controllers) > 0 {
+		sort.Strings(controllers)
+		info.USBControllers = uniqStrings(controllers)
+	}
 }

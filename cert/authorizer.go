@@ -235,10 +235,13 @@ func ForDevelopment() *AuthorizerBuilder {
 		WithCacheSize(100)
 }
 
-// ForProduction 生产环境预设（基础安全检查）
+// ForProduction 生产环境预设（高级安全检查）
+// 注意：v1.x 版本使用 SecurityLevel=1，v2.0 起提升至 SecurityLevel=2
+// 如需保持旧行为，可使用 WithSecurityLevel(1) 显式覆盖
 func ForProduction() *AuthorizerBuilder {
 	return NewAuthorizer().
-		WithSecurityLevel(1). // 基础安全级别（仅简单调试器检测）
+		WithSecurityLevel(2). // 高级安全级别（反调试+时间检测+进程检测）
+		EnableAntiDebug(true).
 		EnableTimeValidation(true).
 		RequireHardwareBinding(true).
 		WithMaxClockSkew(30 * time.Second).
@@ -256,7 +259,10 @@ func ForTesting() *AuthorizerBuilder {
 		WithCacheSize(50)
 }
 
-// UseDefaultCA 使用默认CA配置
+// UseDefaultCA 使用内置兜底 CA 配置。
+//
+// 该方法适合开发、测试或向后兼容场景；生产环境应优先使用 WithCA(...)
+// 或先调用 GenerateCA(...) 生成并持久化独立 CA，再显式加载。
 func (b *AuthorizerBuilder) UseDefaultCA() *AuthorizerBuilder {
 	return b.WithCA(defaultCACert, defaultCAKey)
 }
@@ -443,9 +449,7 @@ func WithSecurityPreset(preset string) Option {
 		case "development":
 			return b.WithRelaxedSecurity()
 		case "production":
-			return b.
-				WithSecureDefaults().
-				WithBasicSecurity()
+			return b.WithSecureDefaults()
 		case "testing":
 			return b.
 				WithRelaxedSecurity().

@@ -66,3 +66,59 @@ func TestSelectBindingStrategy_RespectsMode(t *testing.T) {
 		t.Fatalf("container mode: got %q", got)
 	}
 }
+
+func TestDefaultContainerBindingConfig_UsesAllHintCombineMode(t *testing.T) {
+	cfg := DefaultContainerBindingConfig()
+	if cfg.HintCombineMode == nil {
+		t.Fatalf("expected default HintCombineMode to be set")
+	}
+	if *cfg.HintCombineMode != ContainerHintCombineAll {
+		t.Fatalf("expected default HintCombineMode all, got %s", *cfg.HintCombineMode)
+	}
+}
+
+func TestUniqueIDFromContainer_UsesConfigHintCombineMode(t *testing.T) {
+	prevMode := GetContainerHintCombineMode()
+	if err := SetContainerHintCombineMode(ContainerHintCombineFirst); err != nil {
+		t.Fatalf("set global combine mode: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := SetContainerHintCombineMode(prevMode); err != nil {
+			t.Fatalf("restore global combine mode: %v", err)
+		}
+	})
+
+	dir := t.TempDir()
+	pv := filepath.Join(dir, "pv")
+	if err := os.MkdirAll(pv, 0o755); err != nil {
+		t.Fatalf("mkdir pv: %v", err)
+	}
+
+	combineMode := ContainerHintCombineAll
+	cfg := &ContainerBindingConfig{
+		Mode:                ContainerBindingContainer,
+		PreferHostHardware:  false,
+		FallbackToContainer: true,
+		PersistentVolume:    pv,
+		HintCombineMode:     &combineMode,
+	}
+
+	features := getContainerPersistentFeaturesWithConfig(cfg)
+	expectedHints := combineContainerHintInput(resolveContainerFeatureCombineMode(cfg), features...)
+	if expectedHints == "" {
+		t.Fatalf("expected combined hints for config-driven container binding")
+	}
+
+	result, ok, err := uniqueIDFromContainer("app", "machine-123", "container_scoped", cfg, "")
+	if err != nil {
+		t.Fatalf("uniqueIDFromContainer error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected container-scoped result")
+	}
+
+	want := protect("app/machine-123/"+expectedHints, "machine-123")
+	if result.Hash != want {
+		t.Fatalf("expected config hint combine mode to win: got %s want %s", result.Hash, want)
+	}
+}

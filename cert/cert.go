@@ -24,6 +24,9 @@ var (
 	// defaultCertVersion 默认证书格式版本
 	defaultCertVersion = "1.0.0"
 
+	// defaultCACert/defaultCAKey 仅作为开发、测试和兜底兼容用途的内置 CA。
+	// 生产交付必须显式使用 WithCA(...) 或 GenerateCA(...) 注入独立 CA，
+	// 避免多个部署实例共享同一内置根信任。
 	defaultCACert = []byte(`-----BEGIN CERTIFICATE-----
 MIIBzjCCAYCgAwIBAgIIGIG9ZoHvfOgwBQYDK2VwMGoxCzAJBgNVBAYTAkNOMRIw
 EAYDVQQIEwlHdWFuZ2RvbmcxEjAQBgNVBAcTCUd1YW5nemhvdTEYMBYGA1UECgwP
@@ -101,7 +104,7 @@ func (a *Authorizer) IssueClientCert(req *ClientCertRequest) (*Certificate, erro
 
 	// 验证请求
 	if err := req.Validate(); err != nil {
-		return nil, NewValidationError(ErrInvalidVersion, "invalid client certificate request", err)
+		return nil, NewValidationError(ErrInvalidRequest, "invalid client certificate request", err)
 	}
 
 	// 应用默认值
@@ -180,7 +183,7 @@ func (a *Authorizer) ValidateCert(certPEM []byte, machineID string) error {
 	}
 
 	if _, err = cert.Verify(opts); err != nil {
-		return NewCertificateError(ErrInvalidCertificate, "certificate verification failed", err)
+		return NewCertificateError(ErrCertificateNotTrusted, "certificate verification failed", err)
 	}
 
 	// 检查证书有效性
@@ -273,6 +276,14 @@ func (a *Authorizer) ExtractClientInfo(certPEM []byte) (*ClientInfo, error) {
 				clientInfo.BindingProvider = bindingInfo.Provider
 			}
 		}
+
+		// 提取模块授权信息 (OID: 5)
+		if ext.Id.Equal(a.getOID(5)) {
+			var featuresInfo FeaturesInfo
+			if _, err := asn1.Unmarshal(ext.Value, &featuresInfo); err == nil {
+				clientInfo.Features = &featuresInfo
+			}
+		}
 	}
 
 	return clientInfo, nil
@@ -341,30 +352,30 @@ func (a *Authorizer) validateVersionInfo(cert *x509.Certificate) error {
 	}
 
 	if !found {
-		return NewValidationError(ErrMissingRequiredField, "version information extension not found in certificate", nil)
+		return NewCertificateError(ErrCertificateExtensionMissing, "version information extension not found in certificate", nil)
 	}
 
 	// 检查程序版本是否满足要求
 	if a.runtimeVersion != "" && a.runtimeVersion != "0.0.0" && a.runtimeVersion != "dev" && a.runtimeVersion != "test" {
 		if versionInfo.MinClientVersion == "" {
-			return NewValidationError(ErrInvalidVersion, "version information is missing in the certificate", nil)
+			return NewValidationError(ErrCertificateExtensionMissing, "minimum client version is missing in the certificate", nil)
 		}
 
 		// 验证版本格式
 		if _, err := parse(versionInfo.MinClientVersion); err != nil {
-			return NewValidationError(ErrInvalidVersion, "invalid version format in certificate", err).
+			return NewValidationError(ErrVersionFormatInvalid, "invalid version format in certificate", err).
 				WithDetail("certificate_min_client_version", versionInfo.MinClientVersion)
 		}
 
 		// 比较版本
 		ok, err := compare(a.runtimeVersion, "<", versionInfo.MinClientVersion)
 		if err != nil {
-			return NewValidationError(ErrInvalidVersion, "version comparison error", err).
+			return NewValidationError(ErrVersionCompareFailed, "version comparison error", err).
 				WithDetail("runtime_version", a.runtimeVersion).
 				WithDetail("required_min_client_version", versionInfo.MinClientVersion)
 		}
 		if ok {
-			return NewValidationError(ErrInvalidVersion, "program version is too old", nil).
+			return NewValidationError(ErrVersionTooOld, "program version is too old", nil).
 				WithDetail("runtime_version", a.runtimeVersion).
 				WithDetail("required_min_client_version", versionInfo.MinClientVersion).
 				WithSuggestion("请更新程序到最新版本")
@@ -374,7 +385,7 @@ func (a *Authorizer) validateVersionInfo(cert *x509.Certificate) error {
 	// 证书格式版本检查
 	expectedVersion := a.GetCurrentCertVersion()
 	if versionInfo.LicenseSchemaVersion != expectedVersion {
-		return NewCertificateError(ErrInvalidCertificate, "certificate format version mismatch", nil).
+		return NewCertificateError(ErrCertificateVersionMismatch, "certificate format version mismatch", nil).
 			WithDetail("certificate_version", versionInfo.LicenseSchemaVersion).
 			WithDetail("current_version", expectedVersion).
 			WithSuggestion("请使用匹配的证书格式版本")
@@ -416,14 +427,14 @@ func (a *Authorizer) validateMachineID(cert *x509.Certificate, machineID string)
 			}
 
 			// 未找到匹配的机器ID
-			return NewSecurityError(ErrUnauthorizedAccess, "machine ID not authorized for this certificate", nil).
+			return NewSecurityError(ErrMachineIDNotAuthorized, "machine ID not authorized for this certificate", nil).
 				WithDetail("provided_machine_id", machineID).
 				WithDetail("authorized_machine_ids", authorizedIDs).
 				WithSuggestion("确认机器码是否正确，或联系管理员重新签发证书")
 		}
 	}
 
-	return NewCertificateError(ErrInvalidCertificate, "machine ID extension not found in certificate", nil)
+	return NewCertificateError(ErrCertificateExtensionMissing, "machine ID extension not found in certificate", nil)
 }
 
 // GenerateCA 生成新的CA证书和私钥，并更新授权管理器
@@ -697,6 +708,12 @@ func (a *Authorizer) addCertificateExtensions(template *x509.Certificate, req *C
 	if extensions, err = a.appendBindingExtension(extensions, req); err != nil {
 		return err
 	}
+
+	// 添加模块授权扩展（OID 5）
+	if extensions, err = a.appendFeaturesExtension(extensions, req); err != nil {
+		return err
+	}
+
 	template.ExtraExtensions = extensions
 	return nil
 }
@@ -720,4 +737,129 @@ func (a *Authorizer) appendBindingExtension(extensions []pkix.Extension, req *Cl
 		Critical: false,
 		Value:    bindingValue,
 	}), nil
+}
+
+// appendFeaturesExtension 添加模块授权扩展（OID 5）
+func (a *Authorizer) appendFeaturesExtension(extensions []pkix.Extension, req *ClientCertRequest) ([]pkix.Extension, error) {
+	if req.Features == nil || len(req.Features.Modules) == 0 {
+		return extensions, nil
+	}
+
+	featuresInfo := req.Features.ToFeaturesInfo()
+	if featuresInfo == nil {
+		return extensions, nil
+	}
+
+	featuresValue, err := asn1.Marshal(*featuresInfo)
+	if err != nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to marshal features info", err)
+	}
+
+	return append(extensions, pkix.Extension{
+		Id:       a.getOID(5), // OID 5: 模块授权
+		Critical: false,
+		Value:    featuresValue,
+	}), nil
+}
+
+// ExtractModules 从证书中提取模块权限列表
+func (a *Authorizer) ExtractModules(certPEM []byte) (*FeaturesInfo, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to decode certificate PEM", nil)
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, NewCertificateError(ErrInvalidCertificate, "failed to parse certificate", err)
+	}
+
+	return a.extractFeaturesFromCert(cert)
+}
+
+// extractFeaturesFromCert 从 x509.Certificate 中提取模块权限
+func (a *Authorizer) extractFeaturesFromCert(cert *x509.Certificate) (*FeaturesInfo, error) {
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(a.getOID(5)) {
+			var featuresInfo FeaturesInfo
+			if _, err := asn1.Unmarshal(ext.Value, &featuresInfo); err != nil {
+				return nil, NewCertificateError(ErrInvalidCertificate, "failed to unmarshal features info", err)
+			}
+			return &featuresInfo, nil
+		}
+	}
+	return nil, nil // 没有模块授权扩展，返回 nil（向后兼容）
+}
+
+// HasModule 检查证书是否有指定模块的权限
+func (a *Authorizer) HasModule(certPEM []byte, moduleName string) (bool, error) {
+	features, err := a.ExtractModules(certPEM)
+	if err != nil {
+		return false, err
+	}
+	if features == nil {
+		return false, nil
+	}
+	return features.HasModule(moduleName), nil
+}
+
+// GetModuleQuota 获取指定模块的配额限制
+func (a *Authorizer) GetModuleQuota(certPEM []byte, moduleName string) (int, error) {
+	features, err := a.ExtractModules(certPEM)
+	if err != nil {
+		return 0, err
+	}
+	if features == nil {
+		return 0, NewValidationError(ErrModuleNotAuthorized, "no module authorization in certificate", nil).
+			WithDetail("module", moduleName)
+	}
+
+	module := features.GetModule(moduleName)
+	if module == nil {
+		return 0, NewValidationError(ErrModuleNotAuthorized, "module not found in certificate", nil).
+			WithDetail("module", moduleName)
+	}
+
+	return module.Quota, nil
+}
+
+// ValidateModule 完整验证模块权限（权限+配额+时间+机器码）
+func (a *Authorizer) ValidateModule(certPEM []byte, moduleName string, machineID string) error {
+	// 先验证证书本身
+	if err := a.ValidateCert(certPEM, machineID); err != nil {
+		return err
+	}
+
+	// 提取模块权限
+	features, err := a.ExtractModules(certPEM)
+	if err != nil {
+		return err
+	}
+
+	// 验证模块权限
+	return features.ValidateModule(moduleName, time.Now())
+}
+
+// ValidateModules 批量验证多个模块权限
+func (a *Authorizer) ValidateModules(certPEM []byte, moduleNames []string, machineID string) error {
+	// 先验证证书本身
+	if err := a.ValidateCert(certPEM, machineID); err != nil {
+		return err
+	}
+
+	// 提取模块权限
+	features, err := a.ExtractModules(certPEM)
+	if err != nil {
+		return err
+	}
+
+	// 验证所有模块
+	now := time.Now()
+	for _, name := range moduleNames {
+		if err := features.ValidateModule(name, now); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

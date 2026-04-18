@@ -12,7 +12,7 @@ import (
 
 var processStartTime = getProcessStartTime()
 
-func checkDebugger() bool {
+var checkDebugger = func() bool {
 	data, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return false

@@ -1,19 +1,27 @@
 package cert
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"fmt"
 	"sync"
 	"time"
 )
 
-// ValidationCache 验证缓存
+// ValidationCache 验证缓存（使用 O(1) LRU 驱逐算法）
 type ValidationCache struct {
 	mu      sync.RWMutex
-	entries map[string]*CacheEntry
+	entries map[string]*list.Element // key -> list element
+	lruList *list.List               // 双向链表，头部是最近使用的
 	config  CacheConfig
 	stats   CacheStats
 	done    chan struct{} // 用于关闭清理协程
+}
+
+// cacheItem 缓存项（存储在链表中）
+type cacheItem struct {
+	key   string
+	entry *CacheEntry
 }
 
 // CacheEntry 缓存条目
@@ -37,7 +45,8 @@ type CacheStats struct {
 // NewValidationCache 创建新的验证缓存
 func NewValidationCache(config CacheConfig) *ValidationCache {
 	cache := &ValidationCache{
-		entries: make(map[string]*CacheEntry),
+		entries: make(map[string]*list.Element),
+		lruList: list.New(),
 		config:  config,
 		stats: CacheStats{
 			MaxSize: config.MaxSize,
@@ -55,89 +64,109 @@ func NewValidationCache(config CacheConfig) *ValidationCache {
 
 // Get 从缓存获取验证结果
 func (vc *ValidationCache) Get(certPEM []byte, machineID string) (error, bool) {
-	key := vc.generateKey(certPEM, machineID)
+	// 在锁外计算 key，避免持锁时间过长
+	// 注意：generateKey 内部使用 copy 避免并发问题
+	key := generateCacheKey(certPEM, machineID)
 	now := time.Now()
 
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 
-	entry, exists := vc.entries[key]
-
+	elem, exists := vc.entries[key]
 	if !exists {
 		vc.stats.Misses++
 		return nil, false
 	}
 
+	item := elem.Value.(*cacheItem)
+
 	// 检查是否过期
-	if now.After(entry.ExpiresAt) {
+	if now.After(item.entry.ExpiresAt) {
 		vc.stats.Misses++
+		vc.lruList.Remove(elem)
 		delete(vc.entries, key)
-		vc.stats.Size = len(vc.entries)
+		vc.stats.Size = vc.lruList.Len()
 		return nil, false
 	}
 
+	// 移动到链表头部（最近使用）
+	vc.lruList.MoveToFront(elem)
+
 	// 更新统计信息
 	vc.stats.Hits++
-	entry.HitCount++
-	entry.LastHit = now
+	item.entry.HitCount++
+	item.entry.LastHit = now
 
-	return entry.Result, true
+	return item.entry.Result, true
 }
 
 // Put 将验证结果存储到缓存
 func (vc *ValidationCache) Put(certPEM []byte, machineID string, result error) {
+	key := generateCacheKey(certPEM, machineID)
+
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 
-	key := vc.generateKey(certPEM, machineID)
+	// 如果已存在，更新并移到头部
+	if elem, exists := vc.entries[key]; exists {
+		item := elem.Value.(*cacheItem)
+		item.entry.Result = result
+		item.entry.ExpiresAt = time.Now().Add(vc.config.TTL)
+		item.entry.LastHit = time.Now()
+		vc.lruList.MoveToFront(elem)
+		return
+	}
 
-	// 检查缓存容量
-	if len(vc.entries) >= vc.config.MaxSize {
+	// 检查缓存容量，驱逐最旧条目
+	for vc.lruList.Len() >= vc.config.MaxSize {
 		vc.evictLRU()
 	}
 
 	// 创建新条目
+	now := time.Now()
 	entry := &CacheEntry{
 		Result:    result,
-		ExpiresAt: time.Now().Add(vc.config.TTL),
+		ExpiresAt: now.Add(vc.config.TTL),
 		HitCount:  0,
-		CreatedAt: time.Now(),
-		LastHit:   time.Now(),
+		CreatedAt: now,
+		LastHit:   now,
 	}
 
-	vc.entries[key] = entry
-	vc.stats.Size = len(vc.entries)
+	// 添加到链表头部
+	item := &cacheItem{key: key, entry: entry}
+	elem := vc.lruList.PushFront(item)
+	vc.entries[key] = elem
+	vc.stats.Size = vc.lruList.Len()
 }
 
-// generateKey 生成缓存键
-func (vc *ValidationCache) generateKey(certPEM []byte, machineID string) string {
-	hash := sha256.Sum256(append(certPEM, []byte(machineID)...))
+// generateCacheKey 生成缓存键（并发安全）
+func generateCacheKey(certPEM []byte, machineID string) string {
+	// 创建新的切片避免并发修改问题
+	data := make([]byte, len(certPEM)+len(machineID))
+	copy(data, certPEM)
+	copy(data[len(certPEM):], machineID)
+	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash)
 }
 
-// evictLRU 驱逐最近最少使用的条目
+// generateKey 生成缓存键（保留方法以兼容签名缓存）
+func (vc *ValidationCache) generateKey(certPEM []byte, machineID string) string {
+	return generateCacheKey(certPEM, machineID)
+}
+
+// evictLRU 驱逐最近最少使用的条目（O(1) 时间复杂度）
 func (vc *ValidationCache) evictLRU() {
-	if len(vc.entries) == 0 {
+	// 从链表尾部移除（最久未使用）
+	elem := vc.lruList.Back()
+	if elem == nil {
 		return
 	}
 
-	var oldestKey string
-	var oldestTime time.Time
-
-	// 找到最旧的条目
-	for key, entry := range vc.entries {
-		if oldestKey == "" || entry.LastHit.Before(oldestTime) {
-			oldestKey = key
-			oldestTime = entry.LastHit
-		}
-	}
-
-	// 删除最旧的条目
-	if oldestKey != "" {
-		delete(vc.entries, oldestKey)
-		vc.stats.Evicted++
-		vc.stats.Size = len(vc.entries)
-	}
+	item := elem.Value.(*cacheItem)
+	vc.lruList.Remove(elem)
+	delete(vc.entries, item.key)
+	vc.stats.Evicted++
+	vc.stats.Size = vc.lruList.Len()
 }
 
 // cleanupLoop 清理过期条目的循环
@@ -171,22 +200,20 @@ func (vc *ValidationCache) cleanup() {
 	defer vc.mu.Unlock()
 
 	now := time.Now()
-	expiredKeys := make([]string, 0)
 
-	// 收集过期键
-	for key, entry := range vc.entries {
-		if now.After(entry.ExpiresAt) {
-			expiredKeys = append(expiredKeys, key)
+	// 遍历链表，移除过期条目
+	var next *list.Element
+	for elem := vc.lruList.Front(); elem != nil; elem = next {
+		next = elem.Next()
+		item := elem.Value.(*cacheItem)
+		if now.After(item.entry.ExpiresAt) {
+			vc.lruList.Remove(elem)
+			delete(vc.entries, item.key)
+			vc.stats.Evicted++
 		}
 	}
 
-	// 删除过期条目
-	for _, key := range expiredKeys {
-		delete(vc.entries, key)
-		vc.stats.Evicted++
-	}
-
-	vc.stats.Size = len(vc.entries)
+	vc.stats.Size = vc.lruList.Len()
 }
 
 // Stats 获取缓存统计信息
@@ -195,7 +222,7 @@ func (vc *ValidationCache) Stats() CacheStats {
 	defer vc.mu.RUnlock()
 
 	stats := vc.stats
-	stats.Size = len(vc.entries)
+	stats.Size = vc.lruList.Len()
 	return stats
 }
 
@@ -204,7 +231,8 @@ func (vc *ValidationCache) Clear() {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 
-	vc.entries = make(map[string]*CacheEntry)
+	vc.entries = make(map[string]*list.Element)
+	vc.lruList.Init()
 	vc.stats.Size = 0
 }
 
@@ -212,7 +240,7 @@ func (vc *ValidationCache) Clear() {
 func (vc *ValidationCache) Size() int {
 	vc.mu.RLock()
 	defer vc.mu.RUnlock()
-	return len(vc.entries)
+	return vc.lruList.Len()
 }
 
 // HitRate 获取缓存命中率
@@ -331,13 +359,14 @@ func (svc *SignedValidationCache) StoreWithSignature(
 	result error,
 	snapshotID string,
 ) (*SignedCacheEntry, error) {
+	now := time.Now()
 	// 创建基础缓存条目
 	entry := &CacheEntry{
 		Result:    result,
-		ExpiresAt: time.Now().Add(svc.config.TTL),
+		ExpiresAt: now.Add(svc.config.TTL),
 		HitCount:  0,
-		CreatedAt: time.Now(),
-		LastHit:   time.Now(),
+		CreatedAt: now,
+		LastHit:   now,
 	}
 
 	// 计算数据哈希
@@ -361,7 +390,7 @@ func (svc *SignedValidationCache) StoreWithSignature(
 		CacheEntry: entry,
 		Signature:  signature,
 		MachineID:  machineID,
-		SignedAt:   time.Now(),
+		SignedAt:   now,
 		DataHash:   dataHash,
 		SnapshotID: snapshotID,
 	}
@@ -372,13 +401,16 @@ func (svc *SignedValidationCache) StoreWithSignature(
 
 	key := svc.generateKey(certPEM, machineID)
 
-	// 检查缓存容量
-	if len(svc.entries) >= svc.config.MaxSize {
+	// 检查缓存容量，驱逐最旧条目
+	for svc.lruList.Len() >= svc.config.MaxSize {
 		svc.evictLRU()
 	}
 
-	svc.entries[key] = entry
-	svc.stats.Size = len(svc.entries)
+	// 添加到链表头部
+	item := &cacheItem{key: key, entry: entry}
+	elem := svc.lruList.PushFront(item)
+	svc.entries[key] = elem
+	svc.stats.Size = svc.lruList.Len()
 
 	return signedEntry, nil
 }
@@ -455,11 +487,14 @@ func (svc *SignedValidationCache) ExportSignedEntry(
 	defer svc.mu.RUnlock()
 
 	key := svc.generateKey(certPEM, machineID)
-	entry, exists := svc.entries[key]
+	elem, exists := svc.entries[key]
 
 	if !exists {
 		return nil, fmt.Errorf("entry not found in cache")
 	}
+
+	item := elem.Value.(*cacheItem)
+	entry := item.entry
 
 	// 构建签名条目
 	dataHash := svc.generateKey(certPEM, machineID)

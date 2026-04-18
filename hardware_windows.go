@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,13 +22,16 @@ type windowsHardwareInfo struct {
 	ProductUUID   string `json:"product_uuid,omitempty"`
 	BoardSerial   string `json:"board_serial,omitempty"`
 	ProductSerial string `json:"product_serial,omitempty"`
+	SystemUUID    string `json:"system_uuid,omitempty"`
 	SystemVendor  string `json:"system_vendor,omitempty"`
 	ProductName   string `json:"product_name,omitempty"`
 
-	CPUSignature string `json:"cpu_signature,omitempty"`
-	CPUCores     int    `json:"cpu_cores,omitempty"`
+	CPUSignature  string `json:"cpu_signature,omitempty"`
+	CPUCores      int    `json:"cpu_cores,omitempty"`
+	CPUIdentifier string `json:"cpu_identifier,omitempty"`
 
 	DiskSerials  []string `json:"disk_serials,omitempty"`
+	NVMeSerials  []string `json:"nvme_serials,omitempty"`
 	MACAddresses []string `json:"mac_addresses,omitempty"`
 	MemorySize   uint64   `json:"memory_size,omitempty"`
 
@@ -75,11 +77,17 @@ func GetHardwareInfo() (*windowsHardwareInfo, error) {
 // getWindowsHardwareInfo 收集 Windows 特定硬件信息。
 func getWindowsHardwareInfo(info *windowsHardwareInfo) {
 	// 先尝试 WMI / WMIC（更接近硬件真实值；但可能被策略禁用）
-	applyCPUInfo(info, getWMICPUInfo())
-	applyBoardInfo(info, getWMIBoardInfo())
-	applyBIOSInfo(info, getWMIBIOSInfo())
+	cpuID, cpuName, cpuCores := getWMICPUInfo()
+	applyCPUInfo(info, cpuID, cpuName, cpuCores)
+	boardSerial, boardProduct, boardManufacturer := getWMIBoardInfo()
+	applyBoardInfo(info, boardSerial, boardProduct, boardManufacturer)
+	biosSerial, biosVersion := getWMIBIOSInfo()
+	applyBIOSInfo(info, biosSerial, biosVersion)
 	if serials := getWMIDiskSerials(); len(serials) > 0 {
 		info.DiskSerials = serials
+	}
+	if nvmeSerials := getWMINDVSerials(); len(nvmeSerials) > 0 {
+		info.NVMeSerials = nvmeSerials
 	}
 	if mem := getWMIMemoryInfo(); mem > 0 {
 		info.MemorySize = mem
@@ -97,6 +105,9 @@ func getWindowsHardwareInfo(info *windowsHardwareInfo) {
 	if len(info.DiskSerials) > 0 {
 		sort.Strings(info.DiskSerials)
 	}
+	if len(info.NVMeSerials) > 0 {
+		sort.Strings(info.NVMeSerials)
+	}
 	if len(info.MACAddresses) > 0 {
 		sort.Strings(info.MACAddresses)
 	}
@@ -107,6 +118,9 @@ func applyCPUInfo(info *windowsHardwareInfo, cpuID, cpuName string, cpuCores int
 		// Windows 上的 CPU “签名”优先用 ProcessorId（更稳定），其次 Name。
 		if cpuID != "" {
 			info.CPUSignature = cpuID
+			if info.CPUIdentifier == "" {
+				info.CPUIdentifier = cpuID
+			}
 		} else if cpuName != "" {
 			info.CPUSignature = cpuName
 		}
@@ -145,6 +159,9 @@ func fillFromRegistryFallback(info *windowsHardwareInfo) {
 		if value := readRegistryString(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, "MachineGuid"); value != "" {
 			info.ProductUUID = value
 		}
+	}
+	if info.SystemUUID == "" {
+		info.SystemUUID = info.ProductUUID
 	}
 
 	// BIOS/系统信息：Windows 7+ 常见
@@ -333,16 +350,11 @@ func getWMIMemoryInfo() uint64 {
 // 兼容性：Windows 7+。注意：部分新系统可能移除/禁用 wmic，此时将触发注册表备选。
 func runWMIC(args ...string) (string, error) {
 	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	cmd := exec.Command("wmic", args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// 不把 stderr 暴露给上层（避免泄漏本地信息）；只返回错误以触发降级
+	out, err := commandOutput("wmic", args...)
+	if err != nil {
 		return "", err
 	}
+	stdout.Write(out)
 	return stdout.String(), nil
 }
 
@@ -387,13 +399,8 @@ func splitWMICColumns(line string) []string {
 	if line == "" {
 		return nil
 	}
-	parts := strings.FieldsFunc(line, func(r rune) bool {
-		// 这里不能直接用 Fields，会把 Name 拆碎；因此用“连续空格分隔”的策略：
-		// FieldsFunc 无法直接看连续空格个数，所以我们先把连续空格压缩成一个特殊分隔符。
-		return false
-	})
 
-	// 上面故意不分割，下面手工扫描连续空格并切分
+	// 手工扫描连续空格并切分
 	var cols []string
 	var cur strings.Builder
 	spaceRun := 0
@@ -585,27 +592,79 @@ func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
 // - DiskSerial: 75, CPUSignature: 60, MemorySize: 40
 func collectHardwareWeights(info *windowsHardwareInfo) []HardwareWeight {
 	var weights []HardwareWeight
+	seen := make(map[string]struct{})
+	add := func(name, value string, weight int) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[name+":"+value]; ok {
+			return
+		}
+		seen[name+":"+value] = struct{}{}
+		weights = append(weights, HardwareWeight{name, value, weight})
+	}
 
 	if info.ProductUUID != "" && !looksLikePlaceholderSerial(info.ProductUUID) {
-		weights = append(weights, HardwareWeight{"product_uuid", info.ProductUUID, 100})
+		add("product_uuid", info.ProductUUID, 100)
+	}
+	if info.SystemUUID != "" && info.SystemUUID != info.ProductUUID && !looksLikePlaceholderSerial(info.SystemUUID) {
+		add("system_uuid", info.SystemUUID, 95)
 	}
 	if info.BoardSerial != "" && !looksLikePlaceholderSerial(info.BoardSerial) {
-		weights = append(weights, HardwareWeight{"board_serial", info.BoardSerial, 90})
+		add("board_serial", info.BoardSerial, 90)
 	}
 	if info.BIOSSerial != "" && !looksLikePlaceholderSerial(info.BIOSSerial) {
-		weights = append(weights, HardwareWeight{"bios_serial", info.BIOSSerial, 85})
+		add("bios_serial", info.BIOSSerial, 85)
+	}
+	if info.BIOSVersion != "" && !looksLikePlaceholderSerial(info.BIOSVersion) {
+		add("bios_version", info.BIOSVersion, 40)
 	}
 	if len(info.DiskSerials) > 0 {
-		weights = append(weights, HardwareWeight{"disk_serial", info.DiskSerials[0], 75})
+		add("disk_serial", info.DiskSerials[0], 75)
+	}
+	if len(info.NVMeSerials) > 0 {
+		add("nvme_serial", info.NVMeSerials[0], 78)
+	}
+	if info.CPUIdentifier != "" && !looksLikePlaceholderSerial(info.CPUIdentifier) {
+		add("cpu_id", info.CPUIdentifier, 70)
 	}
 	if info.CPUSignature != "" && !looksLikePlaceholderSerial(info.CPUSignature) {
-		weights = append(weights, HardwareWeight{"cpu_signature", info.CPUSignature, 60})
+		add("cpu_signature", info.CPUSignature, 60)
 	}
 	if info.MemorySize > 0 {
-		weights = append(weights, HardwareWeight{"memory_size", fmt.Sprintf("%d", info.MemorySize), 40})
+		add("memory_size", fmt.Sprintf("%d", info.MemorySize), 40)
 	}
 
 	return weights
+}
+
+// getWMINDVSerials 通过 WMIC 查询 NVMe 序列号（部分系统提供 MSFT_PhysicalDisk）。
+func getWMINDVSerials() []string {
+	out, err := runWMIC("/namespace:\\\\root\\microsoft\\windows\\storage", "path", "MSFT_PhysicalDisk", "get", "SerialNumber,MediaType")
+	if err != nil || out == "" {
+		return nil
+	}
+	rows := parseWMICTable(out)
+	if len(rows) == 0 {
+		return nil
+	}
+
+	var serials []string
+	for _, row := range rows {
+		serial := cleanWMIValue(row["SerialNumber"])
+		media := strings.ToLower(cleanWMIValue(row["MediaType"]))
+		if serial == "" || looksLikePlaceholderSerial(serial) {
+			continue
+		}
+		if media != "" && media != "4" && !strings.Contains(media, "nvme") {
+			continue
+		}
+		serials = append(serials, serial)
+	}
+	serials = uniqueStrings(serials)
+	sort.Strings(serials)
+	return serials
 }
 
 // ProtectedIDWithHardware Windows 版本（硬件指纹 + machine id）。

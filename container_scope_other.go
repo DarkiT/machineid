@@ -11,3 +11,18 @@ func defaultContainerHints() []string {
 	}
 	return nil
 }
+
+func init() {
+	allowK8sEnvHint = func() bool {
+		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+			return true
+		}
+		if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+			return true
+		}
+		if os.Getenv("POD_NAME") != "" || os.Getenv("POD_UID") != "" {
+			return true
+		}
+		return false
+	}
+}

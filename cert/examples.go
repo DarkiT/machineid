@@ -164,36 +164,8 @@ func Example3_BatchOperations() {
 		validationStats.Total, validationStats.Success, validationStats.Failed)
 }
 
-// Example4_ConfigurationFile 配置文件示例
-func Example4_ConfigurationFile() {
-	// 生成默认配置文件
-	configPath := "./cert.config.json"
-	if err := GenerateDefaultConfig(configPath); err != nil {
-		fmt.Printf("生成配置文件失败: %v\n", err)
-		return
-	}
-
-	fmt.Printf("默认配置文件已生成: %s\n", configPath)
-
-	// 从配置文件创建授权管理器
-	auth, err := FromConfigFile(configPath)
-	if err != nil {
-		fmt.Printf("从配置文件创建授权管理器失败: %v\n", err)
-		return
-	}
-
-	built, err := auth.Build()
-	if err != nil {
-		fmt.Printf("构建授权管理器失败: %v\n", err)
-		return
-	}
-
-	config := built.Config()
-	fmt.Printf("配置加载成功，运行版本: %s, 企业ID: %d\n", config.RuntimeVersion, config.EnterpriseID)
-}
-
-// Example5_PresetConfigurations 预设配置示例
-func Example5_PresetConfigurations() {
+// Example4_PresetConfigurations 预设配置示例
+func Example4_PresetConfigurations() {
 	// 开发环境配置
 	devAuth, err := ForDevelopment().Build()
 	if err != nil {
@@ -225,8 +197,8 @@ func Example5_PresetConfigurations() {
 		testConfig.Security.MaxClockSkew, testConfig.Cache.MaxSize)
 }
 
-// Example6_CertificateInspection 证书检查示例
-func Example6_CertificateInspection() {
+// Example5_CertificateInspection 证书检查示例
+func Example5_CertificateInspection() {
 	// 创建证书检查器
 	inspector := NewCertificateInspector()
 
@@ -261,8 +233,8 @@ YXJlIENBMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAw17CSfhk2REC
 	fmt.Printf("密钥用途: %v\n", info.KeyUsage)
 }
 
-// Example7_PerformanceMonitoring 性能监控示例
-func Example7_PerformanceMonitoring() {
+// Example6_PerformanceMonitoring 性能监控示例
+func Example6_PerformanceMonitoring() {
 	monitor := NewPerformanceMonitor()
 
 	// 模拟操作并记录性能
@@ -300,8 +272,8 @@ func Example7_PerformanceMonitoring() {
 	}
 }
 
-// Example8_ErrorHandling 错误处理示例
-func Example8_ErrorHandling() {
+// Example7_ErrorHandling 错误处理示例
+func Example7_ErrorHandling() {
 	// 创建一个会产生错误的请求
 	request := &ClientCertRequest{
 		Identity: &Identity{
@@ -341,8 +313,8 @@ func Example8_ErrorHandling() {
 	}
 }
 
-// Example9_SystemInfoCollection 系统信息收集示例
-func Example9_SystemInfoCollection() {
+// Example8_SystemInfoCollection 系统信息收集示例
+func Example8_SystemInfoCollection() {
 	collector := NewSystemInfoCollector()
 	sysInfo := collector.SystemInfo()
 
@@ -377,8 +349,8 @@ func Example9_SystemInfoCollection() {
 	}
 }
 
-// Example10_ExtractClientInfo 客户信息提取示例
-func Example10_ExtractClientInfo() {
+// Example9_ExtractClientInfo 客户信息提取示例
+func Example9_ExtractClientInfo() {
 	// 创建授权管理器
 	auth, err := NewAuthorizer().Build()
 	if err != nil {
@@ -456,8 +428,8 @@ func Example10_ExtractClientInfo() {
 	fmt.Println("4. 合规性检查和报告")
 }
 
-// Example11_CertificateWatching 证书监控示例
-func Example11_CertificateWatching() {
+// Example10_CertificateWatching 证书监控示例
+func Example10_CertificateWatching() {
 	fmt.Println("=== 证书监控功能演示 ===")
 
 	// 创建授权管理器

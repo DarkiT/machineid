@@ -129,7 +129,7 @@ func TestErrorCodes(t *testing.T) {
 		ErrInvalidCertificate,
 		ErrExpiredCertificate,
 		ErrInvalidMachineID,
-		ErrInvalidVersion,
+		ErrInvalidRequest,
 		ErrCertificateRevoked,
 		ErrMissingRequiredField,
 		ErrDebuggerDetected,

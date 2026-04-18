@@ -5,13 +5,12 @@ package machineid
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 )
 
 func machineID() (string, error) {
 	// AIX系统可以使用uname -u命令获取系统ID
-	out, err := exec.Command("uname", "-u").Output()
+	out, err := commandOutput("uname", "-u")
 	if err != nil {
 		return "", err
 	}

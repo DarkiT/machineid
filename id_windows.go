@@ -40,11 +40,21 @@ func machineID() (string, error) {
 
 // isContainerEnvironment Windows下的容器检测
 func isContainerEnvironment() bool {
-	// Windows容器检测相对简单，主要检查环境变量
+	// Windows容器检测：检查多种容器运行时的环境变量
 	envVars := []string{
+		// Docker
 		"CONTAINER_ID",
 		"DOCKER_CONTAINER_ID",
-		"SERVER_NAME", // Windows容器常用
+		// Kubernetes
+		"KUBERNETES_SERVICE_HOST",
+		"KUBERNETES_PORT",
+		"KUBERNETES_SERVICE_PORT",
+		// Containerd
+		"CONTAINERD_NAMESPACE",
+		// Windows 容器特有
+		"SERVER_NAME",
+		// 通用容器标识
+		"container",
 	}
 
 	for _, envVar := range envVars {
@@ -52,6 +62,18 @@ func isContainerEnvironment() bool {
 			return true
 		}
 	}
+
+	// 检查 Windows 容器特定路径
+	containerPaths := []string{
+		`C:\ContainerMappedDirectories`,
+		`C:\ContainerAdministrator`,
+	}
+	for _, path := range containerPaths {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -60,6 +82,7 @@ func getContainerID() string {
 		"CONTAINER_ID",
 		"DOCKER_CONTAINER_ID",
 		"HOSTNAME",
+		"COMPUTERNAME", // Windows 容器中的计算机名
 	}
 
 	for _, envVar := range envVars {

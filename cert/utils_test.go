@@ -5,8 +5,10 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -153,6 +155,23 @@ func TestInspectCertificate_KeySize(t *testing.T) {
 
 	if info.KeySize != 256 {
 		t.Errorf("证书信息中的密钥大小不匹配: 期望 256, 实际 %d", info.KeySize)
+	}
+}
+
+func TestInspectCertificate_FingerprintIsSHA256(t *testing.T) {
+	t.Parallel()
+
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("生成 Ed25519 密钥失败: %v", err)
+	}
+	cert := createTestCertificate(t, publicKey)
+
+	expected := fmt.Sprintf("%x", sha256.Sum256(cert.Raw))
+	inspector := NewCertificateInspector()
+	info := inspector.InspectCertificate(cert)
+	if info.Fingerprint != expected {
+		t.Fatalf("指纹不匹配: 期望 %s, 实际 %s", expected, info.Fingerprint)
 	}
 }
 

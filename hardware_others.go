@@ -6,6 +6,7 @@ package machineid
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -13,6 +14,8 @@ import (
 // otherHardwareInfo 其他平台简化硬件信息
 type otherHardwareInfo struct {
 	MACAddresses []string `json:"mac_addresses,omitempty"`
+	Hostname     string   `json:"hostname,omitempty"`
+	MachineID    string   `json:"machine_id,omitempty"`
 }
 
 // 其他平台的硬件信息缓存
@@ -48,6 +51,12 @@ func GetHardwareInfo() (*otherHardwareInfo, error) {
 	if macInfo, err := getMACAddr(); err == nil && macInfo != nil && macInfo.Address != "" {
 		info.MACAddresses = []string{macInfo.Address}
 	}
+	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+		info.Hostname = hostname
+	}
+	if id, err := ID(); err == nil && id != "" {
+		info.MachineID = id
+	}
 
 	cachedHardware = info
 	hardwareCacheTime = time.Now()
@@ -75,6 +84,12 @@ func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
 	}
 
 	combined := fmt.Sprintf("other_platform|mac:%s", info.MACAddresses[0])
+	if info.MachineID != "" {
+		combined = combined + "|machine_id:" + info.MachineID
+	}
+	if info.Hostname != "" {
+		combined = combined + "|hostname:" + info.Hostname
+	}
 	hash := sha256.Sum256([]byte(combined))
 	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: true}, nil
 }

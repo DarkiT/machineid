@@ -47,10 +47,11 @@ type Technical struct {
 
 // ClientCertRequest 客户端证书请求
 type ClientCertRequest struct {
-	Identity  *Identity  // 身份标识（必需）
-	Company   *Company   // 公司信息（必需）
-	Contact   *Contact   // 联系信息（可选）
-	Technical *Technical // 技术信息（必需）
+	Identity  *Identity       // 身份标识（必需）
+	Company   *Company        // 公司信息（必需）
+	Contact   *Contact        // 联系信息（可选）
+	Technical *Technical      // 技术信息（必需）
+	Features  *FeaturesConfig // 模块授权配置（可选）
 }
 
 // NewClientRequest 创建新的客户端证书请求构建器
@@ -156,6 +157,30 @@ func (b *ClientCertRequestBuilder) WithValidityDays(days int) *ClientCertRequest
 // WithTemplate 使用模板
 func (b *ClientCertRequestBuilder) WithTemplate(templateName string) *ClientCertRequestBuilder {
 	b.templateName = templateName
+	return b
+}
+
+// WithModules 设置模块授权
+func (b *ClientCertRequestBuilder) WithModules(modules ...*ModuleBuilder) *ClientCertRequestBuilder {
+	if b.req.Features == nil {
+		b.req.Features = &FeaturesConfig{}
+	}
+	for _, m := range modules {
+		if m != nil {
+			b.req.Features.AddModule(m.Build())
+		}
+	}
+	return b
+}
+
+// WithModuleConfigs 设置模块授权（使用 ModuleConfig）
+func (b *ClientCertRequestBuilder) WithModuleConfigs(configs ...ModuleConfig) *ClientCertRequestBuilder {
+	if b.req.Features == nil {
+		b.req.Features = &FeaturesConfig{}
+	}
+	for _, c := range configs {
+		b.req.Features.AddModule(c)
+	}
 	return b
 }
 

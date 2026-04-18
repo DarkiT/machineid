@@ -1,22 +1,51 @@
 package machineid
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+const externalCommandTimeout = 3 * time.Second
 
 // run wraps `exec.Command` with easy access to stdout and stderr.
 func run(stdout, stderr io.Writer, cmd string, args ...string) error {
-	c := exec.Command(cmd, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), externalCommandTimeout)
+	defer cancel()
+
+	c := exec.CommandContext(ctx, cmd, args...)
 	c.Stdin = os.Stdin
 	c.Stdout = stdout
 	c.Stderr = stderr
-	return c.Run()
+	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("machineid: command timed out: %s", cmd)
+		}
+		return err
+	}
+	return nil
+}
+
+func commandOutput(cmd string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), externalCommandTimeout)
+	defer cancel()
+
+	c := exec.CommandContext(ctx, cmd, args...)
+	out, err := c.Output()
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("machineid: command timed out: %s", cmd)
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 // protect calculates HMAC-SHA256 of the application ID, keyed by the machine ID and returns a hex-encoded string.

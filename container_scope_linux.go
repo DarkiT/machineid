@@ -136,6 +136,21 @@ func getContainerPersistentFeaturesWithConfig(config *ContainerBindingConfig) []
 	return features
 }
 
+func init() {
+	allowK8sEnvHint = func() bool {
+		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+			return true
+		}
+		if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+			return true
+		}
+		if os.Getenv("POD_NAME") != "" || os.Getenv("POD_UID") != "" {
+			return true
+		}
+		return false
+	}
+}
+
 func namespaceID(p string) string {
 	// /proc/self/ns/* 通常是形如 "mnt:[4026531840]" 的符号链接。
 	if target, err := os.Readlink(p); err == nil {

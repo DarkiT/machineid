@@ -152,10 +152,24 @@ func (w *CertWatcher) Stats() map[string]interface{} {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	var lastErrorType string
+	var lastErrorCode string
+	var lastErrorDetails map[string]interface{}
+	if ce, ok := w.lastError.(*CertError); ok {
+		lastErrorType = ce.getTypeString()
+		lastErrorCode = string(ce.Code)
+		if len(ce.Details) > 0 {
+			lastErrorDetails = ce.Details
+		}
+	}
+
 	return map[string]interface{}{
 		"is_running":     w.isRunning,
 		"last_check":     w.lastCheck,
 		"last_error":     w.lastError,
+		"last_error_type": lastErrorType,
+		"last_error_code": lastErrorCode,
+		"last_error_details": lastErrorDetails,
 		"check_count":    w.checkCount,
 		"check_interval": w.config.CheckInterval,
 	}
@@ -213,18 +227,24 @@ func (w *CertWatcher) performCheck() {
 
 	// 验证证书有效性（包括吊销检查）
 	if err := w.auth.ValidateCert(w.certPEM, w.machineID); err != nil {
-		if IsSecurityError(err) {
-			// 安全错误不算证书问题，可能是环境变化
-			w.handleError(WatchEventInvalid, clientInfo, err)
-		} else {
-			// 其他错误可能是吊销或证书无效
-			event := WatchEventInvalid
-			if w.config.EnableRevocationCheck {
-				// 这里可以进一步判断是否为吊销
-				event = WatchEventRevoked
+		event := WatchEventInvalid
+		if ce, ok := err.(*CertError); ok {
+			// 安全错误可能是环境变化（调试器/时间篡改等），不等价于证书吊销/过期。
+			if ce.Type == SecurityError && ce.Code != ErrCertificateRevoked {
+				event = WatchEventInvalid
+				w.handleError(event, clientInfo, err)
+				return
 			}
-			w.triggerCallback(event, clientInfo, err)
+			switch ce.Code {
+			case ErrExpiredCertificate:
+				event = WatchEventExpired
+			case ErrCertificateRevoked:
+				event = WatchEventRevoked
+			default:
+				event = WatchEventInvalid
+			}
 		}
+		w.handleError(event, clientInfo, err)
 		return
 	}
 

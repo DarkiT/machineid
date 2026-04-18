@@ -41,11 +41,14 @@ func (m ContainerBindingMode) String() string {
 //   - FallbackToContainer 用于在宿主机硬件不可用/不稳定时是否允许降级到容器级。
 //   - PersistentVolume 用于指向持久卷路径：当采用容器级标识时，可用来存储/读取稳定标识，
 //     以避免每次容器重建都改变绑定结果。
+//   - HintCombineMode 用于控制容器稳定特征在 container_scoped / hybrid 模式下如何合成；
+//     为 nil 时保持当前容器感知 API 的默认行为（使用全部特征）。
 type ContainerBindingConfig struct {
 	Mode                ContainerBindingMode
 	PreferHostHardware  bool
 	FallbackToContainer bool
 	PersistentVolume    string
+	HintCombineMode     *ContainerHintCombineMode
 }
 
 // DefaultContainerBindingConfig 返回默认容器绑定配置。
@@ -55,12 +58,14 @@ type ContainerBindingConfig struct {
 // - PreferHostHardware: true（优先使用宿主机硬件）
 // - FallbackToContainer: true（宿主机硬件不可用时允许降级）
 // - PersistentVolume: 空（由业务自行配置持久卷路径）
+// - HintCombineMode: ContainerHintCombineAll（显式容器感知 API 默认组合全部稳定特征）
 func DefaultContainerBindingConfig() *ContainerBindingConfig {
 	return &ContainerBindingConfig{
 		Mode:                ContainerBindingAuto,
 		PreferHostHardware:  true,
 		FallbackToContainer: true,
 		PersistentVolume:    "",
+		HintCombineMode:     containerHintCombineModePtr(ContainerHintCombineAll),
 	}
 }
 
@@ -98,6 +103,10 @@ func (c *ContainerBindingConfig) Validate() error {
 		// 自动模式下可能最终选择容器级，但该决定发生在运行时；为了减少误用，
 		// 这里要求业务在需要持久卷时明确使用容器级模式。
 		return errContainerBindingPersistentVolumeMode
+	}
+
+	if c.HintCombineMode != nil && !isValidContainerHintCombineMode(*c.HintCombineMode) {
+		return errInvalidContainerHintCombineMode
 	}
 
 	return nil

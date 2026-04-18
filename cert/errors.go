@@ -28,19 +28,33 @@ type ErrorCode string
 
 const (
 	// 验证错误代码
-	ErrInvalidMachineID     ErrorCode = "INVALID_MACHINE_ID"
-	ErrInvalidVersion       ErrorCode = "INVALID_VERSION"
-	ErrExpiredCertificate   ErrorCode = "EXPIRED_CERTIFICATE"
-	ErrInvalidCertificate   ErrorCode = "INVALID_CERTIFICATE"
-	ErrMissingRequiredField ErrorCode = "MISSING_REQUIRED_FIELD"
+	ErrInvalidMachineID            ErrorCode = "INVALID_MACHINE_ID"
+	ErrInvalidVersion              ErrorCode = "INVALID_VERSION"
+	ErrInvalidRequest              ErrorCode = "INVALID_REQUEST"
+	ErrExpiredCertificate          ErrorCode = "EXPIRED_CERTIFICATE"
+	ErrInvalidCertificate          ErrorCode = "INVALID_CERTIFICATE"
+	ErrMissingRequiredField        ErrorCode = "MISSING_REQUIRED_FIELD"
+	ErrCertificateNotTrusted       ErrorCode = "CERTIFICATE_NOT_TRUSTED"
+	ErrCertificateExtensionMissing ErrorCode = "CERTIFICATE_EXTENSION_MISSING"
+	ErrCertificateVersionMismatch  ErrorCode = "CERTIFICATE_VERSION_MISMATCH"
+	ErrVersionTooOld               ErrorCode = "VERSION_TOO_OLD"
+	ErrVersionFormatInvalid        ErrorCode = "VERSION_FORMAT_INVALID"
+	ErrVersionCompareFailed        ErrorCode = "VERSION_COMPARE_FAILED"
+	ErrMachineIDNotAuthorized      ErrorCode = "MACHINE_ID_NOT_AUTHORIZED"
 
 	// 安全错误代码
-	ErrDebuggerDetected   ErrorCode = "DEBUGGER_DETECTED"
-	ErrTimeManipulation   ErrorCode = "TIME_MANIPULATION"
-	ErrUnauthorizedAccess ErrorCode = "UNAUTHORIZED_ACCESS"
-	ErrCertificateRevoked ErrorCode = "CERTIFICATE_REVOKED"
-	ErrTimeRollback       ErrorCode = "TIME_ROLLBACK"    // 时间回滚
-	ErrHardwareChanged    ErrorCode = "HARDWARE_CHANGED" // 硬件变更
+	ErrDebuggerDetected           ErrorCode = "DEBUGGER_DETECTED"
+	ErrTimeManipulation           ErrorCode = "TIME_MANIPULATION"
+	ErrUnauthorizedAccess         ErrorCode = "UNAUTHORIZED_ACCESS"
+	ErrCertificateRevoked         ErrorCode = "CERTIFICATE_REVOKED"
+	ErrTimeRollback               ErrorCode = "TIME_ROLLBACK"                // 时间回滚
+	ErrHardwareChanged            ErrorCode = "HARDWARE_CHANGED"             // 硬件变更
+	ErrMemoryTampered             ErrorCode = "MEMORY_TAMPERED"              // 内存完整性异常
+	ErrVirtualMachineDetected     ErrorCode = "VIRTUAL_MACHINE_DETECTED"     // 虚拟机/沙箱环境
+	ErrHardwareBreakpointDetected ErrorCode = "HARDWARE_BREAKPOINT_DETECTED" // 硬件断点
+	ErrDebugPortDetected          ErrorCode = "DEBUG_PORT_DETECTED"          // 调试端口
+	ErrDebugObjectDetected        ErrorCode = "DEBUG_OBJECT_DETECTED"        // 调试对象句柄
+	ErrDebugFlagsDetected         ErrorCode = "DEBUG_FLAGS_DETECTED"         // 调试标志
 
 	// 配置错误代码
 	ErrInvalidCAConfig ErrorCode = "INVALID_CA_CONFIG"
@@ -57,6 +71,11 @@ const (
 	ErrContainerBindingFailed ErrorCode = "CONTAINER_BINDING_FAILED" // 容器绑定失败
 	ErrSnapshotExpired        ErrorCode = "SNAPSHOT_EXPIRED"         // 快照过期
 	ErrSnapshotInvalid        ErrorCode = "SNAPSHOT_INVALID"         // 快照无效
+
+	// 模块授权错误代码
+	ErrModuleNotAuthorized ErrorCode = "MODULE_NOT_AUTHORIZED" // 模块未授权
+	ErrModuleExpired       ErrorCode = "MODULE_EXPIRED"        // 模块授权过期
+	ErrModuleQuotaExceeded ErrorCode = "MODULE_QUOTA_EXCEEDED" // 模块配额超限
 )
 
 // CertError 证书错误
@@ -165,7 +184,7 @@ func NewSecurityError(code ErrorCode, message string, cause error) *CertError {
 		Details: make(map[string]interface{}),
 	}
 	err.addSecuritySuggestions()
-	return err
+	return sanitizeSecurityError(err)
 }
 
 // NewConfigError 创建配置错误
@@ -210,13 +229,13 @@ func NewSystemError(code ErrorCode, message string, cause error) *CertError {
 // WithDetail 添加错误详情
 func (e *CertError) WithDetail(key string, value interface{}) *CertError {
 	e.Details[key] = value
-	return e
+	return sanitizeSecurityError(e)
 }
 
 // WithSuggestion 添加解决建议
 func (e *CertError) WithSuggestion(suggestion string) *CertError {
 	e.Suggestions = append(e.Suggestions, suggestion)
-	return e
+	return sanitizeSecurityError(e)
 }
 
 // addValidationSuggestions 添加验证错误的建议
@@ -229,9 +248,20 @@ func (e *CertError) addValidationSuggestions() {
 			"检查机器码格式是否正确")
 	case ErrInvalidVersion:
 		e.Suggestions = append(e.Suggestions,
-			"版本号应采用语义化版本格式(如: 1.0.0)",
-			"确保版本号只包含数字和点号",
-			"检查版本号是否包含负数")
+			"该错误码已保留用于向后兼容；新版本中版本相关错误应使用更细粒度的错误码",
+			"优先检查是否为 VERSION_FORMAT_INVALID / VERSION_TOO_OLD / VERSION_COMPARE_FAILED")
+	case ErrVersionFormatInvalid:
+		e.Suggestions = append(e.Suggestions,
+			"证书中的版本号格式非法，应为纯数字点分格式(如: 1.0.0)",
+			"检查证书签发时的 MinClientVersion 参数")
+	case ErrVersionTooOld:
+		e.Suggestions = append(e.Suggestions,
+			"程序版本过低，请更新到证书要求的最低版本",
+			"检查 WithRuntimeVersion 是否设置为真实运行版本")
+	case ErrVersionCompareFailed:
+		e.Suggestions = append(e.Suggestions,
+			"版本比较失败：检查 WithRuntimeVersion 与证书 MinClientVersion 是否为纯数字点分格式",
+			"如包含预发布标识（如 -beta），请在签发侧或运行侧做格式归一化")
 	case ErrExpiredCertificate:
 		e.Suggestions = append(e.Suggestions,
 			"请联系管理员更新证书",
@@ -241,6 +271,10 @@ func (e *CertError) addValidationSuggestions() {
 		e.Suggestions = append(e.Suggestions,
 			"检查所有必需字段是否已填写",
 			"参考文档确认必需字段列表")
+	case ErrInvalidRequest:
+		e.Suggestions = append(e.Suggestions,
+			"证书请求参数不合法：检查必填字段与字段格式",
+			"建议使用 NewClientRequest().Build() 以获得更早期的校验错误")
 	}
 }
 
@@ -261,6 +295,10 @@ func (e *CertError) addSecuritySuggestions() {
 			"联系管理员确认证书状态",
 			"检查是否有新的证书可用",
 			"确认程序版本是否需要更新")
+	case ErrMachineIDNotAuthorized:
+		e.Suggestions = append(e.Suggestions,
+			"机器码不匹配：确认传入 ValidateCert 的 machineID 是否与签发时一致",
+			"如机器硬件绑定策略变化，请重新签发证书")
 	case ErrTimeRollback:
 		e.Suggestions = append(e.Suggestions,
 			"检测到系统时间回滚，请同步到正确时间",
@@ -285,6 +323,30 @@ func (e *CertError) addSecuritySuggestions() {
 			"硬件快照签名验证失败",
 			"检查快照文件是否被篡改",
 			"确认使用正确的应用标识符")
+	case ErrMemoryTampered:
+		e.Suggestions = append(e.Suggestions,
+			"检测到内存完整性异常：可能存在注入/篡改或内存故障",
+			"建议在干净环境重启并复核运行环境安全")
+	case ErrVirtualMachineDetected:
+		e.Suggestions = append(e.Suggestions,
+			"检测到虚拟机/沙箱环境：确认是否在分析/自动化环境中运行",
+			"如为合法虚拟化部署，请降低安全级别或配置白名单策略")
+	case ErrHardwareBreakpointDetected:
+		e.Suggestions = append(e.Suggestions,
+			"检测到硬件断点：可能处于调试/分析环境",
+			"请在无调试器环境运行，或降低安全级别")
+	case ErrDebugPortDetected:
+		e.Suggestions = append(e.Suggestions,
+			"检测到调试端口：可能处于调试/分析环境",
+			"请关闭调试器后重试")
+	case ErrDebugObjectDetected:
+		e.Suggestions = append(e.Suggestions,
+			"检测到调试对象：可能处于调试/分析环境",
+			"请关闭调试器后重试")
+	case ErrDebugFlagsDetected:
+		e.Suggestions = append(e.Suggestions,
+			"检测到调试标志异常：可能处于调试/分析环境",
+			"请关闭调试器后重试")
 	}
 }
 

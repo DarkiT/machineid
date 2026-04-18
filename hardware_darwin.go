@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -22,14 +21,6 @@ const (
 	chipTypeIntel        = "Intel"
 	chipTypeAppleSilicon = "AppleSilicon"
 )
-
-// HardwareWeight 硬件信息权重
-// 与 Linux 保持一致，用于按权重选择指纹组件。
-type HardwareWeight struct {
-	Name   string
-	Value  string
-	Weight int
-}
 
 // macOSHardwareInfo macOS 平台硬件信息（增强版）。
 //
@@ -46,6 +37,7 @@ type macOSHardwareInfo struct {
 	MemorySize   uint64 `json:"memory_size,omitempty"`
 
 	DiskSerials  []string `json:"disk_serials,omitempty"`
+	NVMeSerials  []string `json:"nvme_serials,omitempty"`
 	MACAddresses []string `json:"mac_addresses,omitempty"`
 
 	// ChipType 用于区分 Intel / AppleSilicon（Apple Silicon 进一步可通过 getAppleSiliconInfo 获取 M1/M2/M3）。
@@ -156,7 +148,7 @@ func getMacOSHardwareInfo(info *macOSHardwareInfo) error {
 // getIORegistryInfo 使用ioreg获取IO注册表信息
 func getIORegistryInfo(info *macOSHardwareInfo) error {
 	// 获取平台专家设备信息
-	output, err := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
+	output, err := commandOutput("ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	if err != nil {
 		return fmt.Errorf("ioreg IOPlatformExpertDevice: %w", err)
 	}
@@ -281,24 +273,45 @@ func ProtectedIDWithHardware(appID string) (string, error) {
 // - CPUSignature: 60
 func collectHardwareWeights(info *macOSHardwareInfo) []HardwareWeight {
 	var weights []HardwareWeight
+	seen := make(map[string]struct{})
+	add := func(name, value string, weight int) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[name+":"+value]; ok {
+			return
+		}
+		seen[name+":"+value] = struct{}{}
+		weights = append(weights, HardwareWeight{name, value, weight})
+	}
 
 	// 强特征
 	if info.ProductSerial != "" {
-		weights = append(weights, HardwareWeight{"product_serial", info.ProductSerial, 100})
+		add("product_serial", info.ProductSerial, 100)
 	}
 	if info.SystemUUID != "" {
-		weights = append(weights, HardwareWeight{"system_uuid", info.SystemUUID, 95})
+		add("system_uuid", info.SystemUUID, 95)
 	}
 	if len(info.DiskSerials) > 0 && info.DiskSerials[0] != "" {
-		weights = append(weights, HardwareWeight{"disk_serial", info.DiskSerials[0], 80})
+		add("disk_serial", info.DiskSerials[0], 80)
+	}
+	if len(info.NVMeSerials) > 0 && info.NVMeSerials[0] != "" {
+		add("nvme_serial", info.NVMeSerials[0], 82)
 	}
 
 	// 中强特征
 	if info.ChipType != "" {
-		weights = append(weights, HardwareWeight{"chip_type", info.ChipType, 70})
+		add("chip_type", info.ChipType, 70)
 	}
 	if info.CPUSignature != "" {
-		weights = append(weights, HardwareWeight{"cpu_signature", info.CPUSignature, 60})
+		add("cpu_signature", info.CPUSignature, 60)
+	}
+	if info.BoardSerial != "" {
+		add("board_serial", info.BoardSerial, 75)
+	}
+	if info.SecureEnclaveID != "" {
+		add("secure_enclave_id", info.SecureEnclaveID, 65)
 	}
 
 	return weights
@@ -353,7 +366,7 @@ func uniqueNonEmptySorted(in []string) []string {
 // ---- system_profiler JSON 解析（避免 awk/sed）----
 
 func getSPHardwareInfo(info *macOSHardwareInfo) error {
-	out, err := exec.Command("system_profiler", "SPHardwareDataType", "-json").Output()
+	out, err := commandOutput("system_profiler", "SPHardwareDataType", "-json")
 	if err != nil {
 		return fmt.Errorf("system_profiler SPHardwareDataType -json: %w", err)
 	}
@@ -415,7 +428,7 @@ func getSPHardwareInfo(info *macOSHardwareInfo) error {
 }
 
 func getSPStorageInfo(info *macOSHardwareInfo) error {
-	out, err := exec.Command("system_profiler", "SPStorageDataType", "-json").Output()
+	out, err := commandOutput("system_profiler", "SPStorageDataType", "-json")
 	if err != nil {
 		return fmt.Errorf("system_profiler SPStorageDataType -json: %w", err)
 	}
@@ -433,11 +446,19 @@ func getSPStorageInfo(info *macOSHardwareInfo) error {
 	if len(serials) > 0 {
 		info.DiskSerials = append(info.DiskSerials, serials...)
 	}
+
+	nvmeSerials := collectStringsDeep(payload, func(key string, _ any) bool {
+		k := strings.ToLower(key)
+		return k == "nvme_serial" || k == "nvmeserial" || k == "nvme_serial_number"
+	})
+	if len(nvmeSerials) > 0 {
+		info.NVMeSerials = append(info.NVMeSerials, nvmeSerials...)
+	}
 	return nil
 }
 
 func getSPNetworkInfo(info *macOSHardwareInfo) error {
-	out, err := exec.Command("system_profiler", "SPNetworkDataType", "-json").Output()
+	out, err := commandOutput("system_profiler", "SPNetworkDataType", "-json")
 	if err != nil {
 		return fmt.Errorf("system_profiler SPNetworkDataType -json: %w", err)
 	}
@@ -567,7 +588,7 @@ func guessChipTypeFromStrings(inputs ...string) string {
 
 func getAppleSiliconInfo() (chip string, chipType string, err error) {
 	// Apple Silicon 常见特征：uname -m 返回 arm64；或 sysctl machdep.cpu.brand_string 不存在/为空等。
-	out, err := exec.Command("uname", "-m").Output()
+	out, err := commandOutput("uname", "-m")
 	if err != nil {
 		return "", "", fmt.Errorf("uname -m: %w", err)
 	}
@@ -589,7 +610,7 @@ func getAppleSiliconInfo() (chip string, chipType string, err error) {
 	}
 
 	// 兜底：sysctl -n machdep.cpu.brand_string 在 Apple Silicon 上可能不可用；但尝试一次不影响。
-	if out, err := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output(); err == nil {
+	if out, err := commandOutput("sysctl", "-n", "machdep.cpu.brand_string"); err == nil {
 		if c := detectMSeries(string(out)); c != "" {
 			return c, chipType, nil
 		}
@@ -614,7 +635,7 @@ func detectMSeries(s string) string {
 
 func getSecureEnclaveID() (string, error) {
 	// Apple Silicon：尝试从 AppleARMPE 类读取（若不可用则返回空）。
-	if out, err := exec.Command("uname", "-m").Output(); err == nil {
+	if out, err := commandOutput("uname", "-m"); err == nil {
 		arch := strings.TrimSpace(string(out))
 		if arch != "arm64" && arch != "aarch64" {
 			return "", nil
@@ -622,36 +643,30 @@ func getSecureEnclaveID() (string, error) {
 	}
 
 	// ioreg -rd1 -c AppleARMPE
-	out, err := exec.Command("ioreg", "-rd1", "-c", "AppleARMPE").Output()
+	out, err := commandOutput("ioreg", "-rd1", "-c", "AppleARMPE")
 	if err != nil {
 		// 该类可能不存在或权限受限：作为可选信息不抛硬错误
 		return "", nil
 	}
 
-	// 常见字段并不稳定，这里只做“尽量提取”: 取第一段看起来像 ID 的字符串字段
-	// 例如可能包含 "unique-chip-id" / "ecid" 等（不同系统差异大）。
+	// 仅提取明确字段，避免顺序依赖导致不稳定。
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, `" = "`) {
 			continue
 		}
-		// 尝试提取： "key" = "value"
 		parts := strings.SplitAfter(line, `" = "`)
 		if len(parts) != 2 {
 			continue
 		}
-		val := strings.TrimRight(parts[1], `"`)
-		val = strings.TrimSpace(val)
-		if val == "" {
+		key := strings.TrimSpace(strings.Trim(parts[0], `"`))
+		val := strings.TrimSpace(strings.TrimRight(parts[1], `"`))
+		if val == "" || val == "0" || val == "1" || len(val) < 8 {
 			continue
 		}
-		// 排除明显无关的短值
-		if len(val) < 8 {
-			continue
-		}
-		// 排除布尔等
-		if val == "0" || val == "1" {
+		keyLower := strings.ToLower(key)
+		if keyLower != "unique-chip-id" && keyLower != "ecid" && keyLower != "chip-id" {
 			continue
 		}
 		return val, nil

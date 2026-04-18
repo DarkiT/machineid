@@ -1,6 +1,8 @@
 package cert
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -244,6 +246,220 @@ func TestValidateCert_WrongMachineID(t *testing.T) {
 	}
 }
 
+func TestValidateCert_MachineIDNotAuthorizedReturnsExpectedCode(t *testing.T) {
+	t.Parallel()
+
+	auth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	req := &ClientCertRequest{
+		Identity: &Identity{MachineID: "authorized-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:  &Company{Name: "Test", Department: "Test"},
+		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
+	}
+	issued, err := auth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	err = auth.ValidateCert(issued.CertPEM, "not-authorized")
+	if err == nil {
+		t.Fatalf("期望机器码不匹配错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrMachineIDNotAuthorized {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrMachineIDNotAuthorized, ce.Code)
+	}
+}
+
+func TestValidateCert_MissingMachineIDExtensionReturnsExpectedCode(t *testing.T) {
+	t.Parallel()
+
+	auth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	// 直接生成一张不包含 machine-id 扩展的证书（用测试 CA 签名，链验证应通过）
+	certDER, _, err := issueTestCertificateWithoutExtensions(t, auth, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("生成测试证书失败: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	err = auth.ValidateCert(certPEM, "any-machine")
+	if err == nil {
+		t.Fatalf("期望扩展缺失错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrCertificateExtensionMissing {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrCertificateExtensionMissing, ce.Code)
+	}
+}
+
+func TestValidateCert_CertVersionMismatchReturnsExpectedCode(t *testing.T) {
+	t.Parallel()
+
+	auth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	machineID := "test-machine"
+	req := &ClientCertRequest{
+		Identity: &Identity{MachineID: machineID, ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:  &Company{Name: "Test", Department: "Test"},
+		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
+	}
+	issued, err := auth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	// 切换当前证书格式版本，制造 mismatch
+	auth.SetCurrentCertVersion("9.9.9")
+	err = auth.ValidateCert(issued.CertPEM, machineID)
+	if err == nil {
+		t.Fatalf("期望版本不匹配错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrCertificateVersionMismatch {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrCertificateVersionMismatch, ce.Code)
+	}
+}
+
+func TestValidateCert_VersionTooOldReturnsExpectedCode(t *testing.T) {
+	t.Parallel()
+
+	auth, err := newTestAuthorizerBuilder(t).
+		WithRuntimeVersion("1.0.0").
+		Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	req := &ClientCertRequest{
+		Identity: &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:  &Company{Name: "Test", Department: "Test"},
+		Technical: &Technical{MinClientVersion: "2.0.0", ValidityPeriodDays: 1},
+	}
+	issued, err := auth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	err = auth.ValidateCert(issued.CertPEM, "test-machine")
+	if err == nil {
+		t.Fatalf("期望版本过低错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrVersionTooOld {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrVersionTooOld, ce.Code)
+	}
+}
+
+func issueTestCertificateWithoutExtensions(t *testing.T, auth *Authorizer, notAfter time.Time) (certDER []byte, machineID string, err error) {
+	t.Helper()
+
+	// 复用 CA，但不添加自定义扩展
+	tmpl := auth.createCertificateTemplate(&ClientCertRequest{
+		Identity:  &Identity{MachineID: "ignored", ExpiryDate: notAfter},
+		Company:   &Company{Name: "Test"},
+		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
+	}, nil)
+
+	pub, _, genErr := ed25519.GenerateKey(rand.Reader)
+	if genErr != nil {
+		return nil, "", genErr
+	}
+	der, genErr := x509.CreateCertificate(rand.Reader, tmpl, auth.caCert, pub, auth.caKey)
+	if genErr != nil {
+		return nil, "", genErr
+	}
+	return der, "", nil
+}
+
+func TestValidateCert_RevokedCertificateReturnsRevokedError(t *testing.T) {
+	t.Parallel()
+
+	machineID := "test-machine-id"
+	auth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	req := &ClientCertRequest{
+		Identity: &Identity{
+			MachineID:  machineID,
+			ExpiryDate: time.Now().Add(24 * time.Hour),
+		},
+		Company: &Company{
+			Name:       "Test Company",
+			Department: "Test Dept",
+		},
+		Technical: &Technical{
+			MinClientVersion:   "0.0.0",
+			ValidityPeriodDays: 1,
+		},
+	}
+
+	cert, err := auth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	// 将该证书加入吊销列表
+	serial, err := extractSerialNumber(cert.CertPEM)
+	if err != nil {
+		t.Fatalf("提取证书序列号失败: %v", err)
+	}
+	auth.revokeManager.mu.Lock()
+	auth.revokeManager.revokeList.RevokedCerts[serial] = &RevokeInfo{
+		SerialNumber: serial,
+		RevokeDate:   time.Now(),
+		RevokeReason: "test",
+	}
+	auth.revokeManager.mu.Unlock()
+
+	err = auth.ValidateCert(cert.CertPEM, machineID)
+	if err == nil {
+		t.Fatalf("期望返回吊销错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrCertificateRevoked {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrCertificateRevoked, ce.Code)
+	}
+}
+
+func extractSerialNumber(certPEM []byte) (string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	return cert.SerialNumber.String(), nil
+}
+
 // TestValidateCert_InvalidPEM 测试无效的PEM格式
 func TestValidateCert_InvalidPEM(t *testing.T) {
 	t.Parallel()
@@ -286,6 +502,49 @@ MIIBkTCB+wIBATANBgkqhkiG9w0BAQsFADBFMQswCQYDVQQGEwJDTjEQMA4GA1UE
 				t.Error("期望验证失败（无效的PEM），但成功了")
 			}
 		})
+	}
+}
+
+func TestValidateCert_CertificateNotTrustedReturnsExpectedCode(t *testing.T) {
+	t.Parallel()
+
+	// 使用另一套 CA 签发证书，验证时用当前 auth 的 CA，应触发链不受信
+	otherAuth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	// 重建一套独立 CA：直接调用 GenerateCA 覆盖 CA
+	if err := otherAuth.GenerateCA(CAInfo{CommonName: "Other CA", Organization: "Other", Country: "CN", Province: "GD", Locality: "SZ", ValidDays: 365}); err != nil {
+		t.Fatalf("生成其他 CA 失败: %v", err)
+	}
+
+	req := &ClientCertRequest{
+		Identity: &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:  &Company{Name: "Test", Department: "Test"},
+		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
+	}
+	issued, err := otherAuth.IssueClientCert(req)
+	if err != nil {
+		t.Fatalf("签发证书失败: %v", err)
+	}
+
+	// 用默认测试 CA 的 auth 验证这张证书，应失败
+	auth, err := newTestAuthorizerBuilder(t).WithRuntimeVersion("test").Build()
+	if err != nil {
+		t.Fatalf("创建授权管理器失败: %v", err)
+	}
+
+	err = auth.ValidateCert(issued.CertPEM, "test-machine")
+	if err == nil {
+		t.Fatalf("期望链不受信错误，但得到 nil")
+	}
+	ce, ok := err.(*CertError)
+	if !ok {
+		t.Fatalf("期望 *CertError, 实际 %T: %v", err, err)
+	}
+	if ce.Code != ErrCertificateNotTrusted {
+		t.Fatalf("错误码不匹配: 期望 %s, 实际 %s", ErrCertificateNotTrusted, ce.Code)
 	}
 }
 

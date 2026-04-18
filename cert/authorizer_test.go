@@ -394,3 +394,16 @@ func TestAuthorizerConfig(t *testing.T) {
 		t.Error("缓存配置字段错误")
 	}
 }
+
+func TestWithSecurityPresetProductionKeepsAdvancedLevel(t *testing.T) {
+	t.Parallel()
+
+	builder := NewAuthorizer().Apply(WithSecurityPreset("production"))
+	level, ok := builder.config.Security.EffectiveSecurityLevel()
+	if !ok {
+		t.Fatal("production preset should set security level")
+	}
+	if level != 2 {
+		t.Fatalf("expected production preset level 2, got %d", level)
+	}
+}

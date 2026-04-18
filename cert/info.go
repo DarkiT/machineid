@@ -28,6 +28,9 @@ type ClientInfo struct {
 	// 版本信息
 	MinClientVersion   string // 最低客户端版本要求
 	ValidityPeriodDays int    // 证书有效天数
+
+	// 模块授权信息
+	Features *FeaturesInfo // 模块权限列表
 }
 
 // Certificate 证书信息
@@ -66,4 +69,51 @@ type VersionInfo struct {
 type BindingInfo struct {
 	Mode     string
 	Provider string
+}
+
+// FeaturesInfo 模块授权信息（OID 5）
+// 用于在 X.509 证书中存储模块级授权信息
+type FeaturesInfo struct {
+	Modules []ModulePermission
+}
+
+// ModulePermission 单个模块权限
+type ModulePermission struct {
+	Name      string // 模块名称，如 "report", "export", "api"
+	Enabled   bool   // 是否启用
+	Quota     int    // 配额限制（0=无限制）
+	NotBefore int64  // 模块生效时间（Unix 时间戳，0=使用证书时间）
+	NotAfter  int64  // 模块过期时间（Unix 时间戳，0=使用证书时间）
+	Extra     string // 扩展数据（JSON 格式）
+}
+
+// IsValid 检查模块权限是否在有效期内
+func (m *ModulePermission) IsValid(now time.Time) bool {
+	if !m.Enabled {
+		return false
+	}
+	nowUnix := now.Unix()
+	if m.NotBefore > 0 && nowUnix < m.NotBefore {
+		return false
+	}
+	if m.NotAfter > 0 && nowUnix > m.NotAfter {
+		return false
+	}
+	return true
+}
+
+// GetNotBefore 获取模块生效时间
+func (m *ModulePermission) GetNotBefore() time.Time {
+	if m.NotBefore == 0 {
+		return time.Time{}
+	}
+	return time.Unix(m.NotBefore, 0)
+}
+
+// GetNotAfter 获取模块过期时间
+func (m *ModulePermission) GetNotAfter() time.Time {
+	if m.NotAfter == 0 {
+		return time.Time{}
+	}
+	return time.Unix(m.NotAfter, 0)
 }

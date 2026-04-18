@@ -230,32 +230,32 @@ func (tm *TemplateManager) validateSecurityLevel(req *ClientCertRequest, level T
 	case TemplateSecurityLevelCritical:
 		// 关键级别需要所有联系信息
 		if req.Contact == nil {
-			return NewSecurityError(ErrUnauthorizedAccess,
+			return NewSecurityError(ErrMissingRequiredField,
 				"critical security level requires complete contact information", nil)
 		}
 		if req.Contact.Person == "" || req.Contact.Email == "" || req.Contact.Phone == "" {
-			return NewSecurityError(ErrUnauthorizedAccess,
+			return NewSecurityError(ErrMissingRequiredField,
 				"critical security level requires person, email and phone", nil)
 		}
 		fallthrough
 	case TemplateSecurityLevelHigh:
 		// 高级别需要版本信息
 		if req.Technical == nil || req.Technical.MinClientVersion == "" {
-			return NewSecurityError(ErrUnauthorizedAccess,
+			return NewSecurityError(ErrMissingRequiredField,
 				"high security level requires minimum client version information", nil)
 		}
 		fallthrough
 	case TemplateSecurityLevelMedium:
 		// 中级别需要公司信息
 		if req.Company == nil || req.Company.Name == "" {
-			return NewSecurityError(ErrUnauthorizedAccess,
+			return NewSecurityError(ErrMissingRequiredField,
 				"medium security level requires company information", nil)
 		}
 		fallthrough
 	case TemplateSecurityLevelLow:
 		// 低级别只需要机器ID
 		if req.Identity == nil || req.Identity.MachineID == "" {
-			return NewSecurityError(ErrUnauthorizedAccess,
+			return NewSecurityError(ErrMissingRequiredField,
 				"all security levels require machine ID", nil)
 		}
 	}

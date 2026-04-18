@@ -4,6 +4,7 @@ import (
 	"crypto/dsa" // nolint:staticcheck // 需要支持识别旧的 DSA 证书
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -157,8 +158,8 @@ func (ci *CertificateInspector) parseExtKeyUsage(usages []x509.ExtKeyUsage) []st
 
 // calculateFingerprint 计算证书指纹
 func (ci *CertificateInspector) calculateFingerprint(cert *x509.Certificate) string {
-	// 使用SHA-256计算指纹
-	return fmt.Sprintf("%x", cert.Raw)[:32] // 简化的指纹
+	sum := sha256.Sum256(cert.Raw)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // getKeySize 获取密钥大小

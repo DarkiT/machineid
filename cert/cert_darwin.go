@@ -29,7 +29,7 @@ func getProcessStartTime() time.Time {
 	return t
 }
 
-func checkDebugger() bool {
+var checkDebugger = func() bool {
 	// macOS 下可以通过 sysctl 检查
 	cmd := exec.Command("sysctl", "kern.proc.pid."+strconv.Itoa(os.Getpid()))
 	output, err := cmd.Output()

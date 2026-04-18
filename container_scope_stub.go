@@ -10,5 +10,9 @@ func selectBindingStrategy(_ *ContainerBindingConfig) string {
 
 // 非 Linux 平台不做容器持久特征提取，返回空切片。
 func getContainerPersistentFeaturesWithConfig(_ *ContainerBindingConfig) []string {
-	return nil
+	return []string{}
+}
+
+func init() {
+	allowK8sEnvHint = func() bool { return false }
 }
