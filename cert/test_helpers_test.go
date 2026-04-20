@@ -51,16 +51,16 @@ func ensureTestCA() error {
 	return testCAErr
 }
 
-func getTestCA(t *testing.T) ([]byte, []byte) {
-	t.Helper()
+func getTestCA(tb testing.TB) ([]byte, []byte) {
+	tb.Helper()
 	if err := ensureTestCA(); err != nil {
-		t.Fatalf("生成测试 CA 失败: %v", err)
+		tb.Fatalf("生成测试 CA 失败: %v", err)
 	}
 	return testCACert, testCAKey
 }
 
-func newTestAuthorizerBuilder(t *testing.T) *AuthorizerBuilder {
-	t.Helper()
-	certPEM, keyPEM := getTestCA(t)
+func newTestAuthorizerBuilder(tb testing.TB) *AuthorizerBuilder {
+	tb.Helper()
+	certPEM, keyPEM := getTestCA(tb)
 	return NewAuthorizer().WithCA(certPEM, keyPEM)
 }
