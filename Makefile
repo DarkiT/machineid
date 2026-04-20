@@ -15,6 +15,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 MAIN_PATH := ./cmd/machineid/
 # 输出目录
 BIN_DIR := ./bin
+CROSS_BUILD_SCRIPT := ./scripts/check-cross-builds.sh
 
 # Go 相关工具
 GOLINT := golangci-lint
@@ -141,6 +142,14 @@ test:
 	$(GOTEST) -v ./... -coverprofile=./coverage/coverage.out
 	$(GOTEST) -json ./... 2>&1 | tdd-guard-go -project-root /workspace
 
+# 跨平台编译兼容性检测（核心矩阵）
+check-cross-builds:
+	bash $(CROSS_BUILD_SCRIPT) core
+
+# 跨平台编译兼容性检测（扩展矩阵）
+check-cross-builds-extended:
+	bash $(CROSS_BUILD_SCRIPT) extended
+
 # 测试（带竞态检测）
 test-race:
 	$(GOTEST) -v -race ./... -coverprofile=./coverage/coverage.out
@@ -188,6 +197,8 @@ help:
 	@echo "测试相关："
 	@echo "  test                 - 运行测试"
 	@echo "  test-race            - 运行竞态检测测试"
+	@echo "  check-cross-builds   - 运行核心跨平台编译兼容性检测"
+	@echo "  check-cross-builds-extended - 运行扩展跨平台编译兼容性检测"
 	@echo "  cover                - 显示测试覆盖率"
 	@echo "  benchmark            - 运行性能基准测试"
 	@echo "  mock                 - 生成模拟数据"
@@ -200,4 +211,4 @@ help:
 	@echo "  init-project         - 初始化项目目录结构"
 	@echo "  help                 - 显示此帮助信息"
 
-.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-arm build-windows-amd64 build-windows-arm64 build-darwin-amd64 build-darwin-arm64 build-freebsd-amd64 build-all build-common clean info help dev run docker-dev docker-prod fmt lint vet swagger test test-race cover benchmark mock migrate-up migrate-down install-dev-deps init-project
+.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-arm build-windows-amd64 build-windows-arm64 build-darwin-amd64 build-darwin-arm64 build-freebsd-amd64 build-all build-common clean info help dev run docker-dev docker-prod fmt lint vet swagger test test-race check-cross-builds check-cross-builds-extended cover benchmark mock migrate-up migrate-down install-dev-deps init-project

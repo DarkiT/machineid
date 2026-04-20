@@ -81,10 +81,6 @@ func readLinuxBaseMachineID() (string, error) {
 	return normalizeMachineIDValue(string(id)), nil
 }
 
-func normalizeMachineIDValue(value string) string {
-	return strings.ToUpper(trim(value))
-}
-
 func resolvePreferredMachineID(baseID, containerID string, isContainer bool) (string, IDSource) {
 	hostID := normalizeMachineIDValue(hostHardwareMachineIDProvider())
 	containerID = normalizeMachineIDValue(containerID)
