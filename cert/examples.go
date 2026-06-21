@@ -116,7 +116,7 @@ func Example3_BatchOperations() {
 
 	// 准备多个证书请求
 	requests := make([]*ClientCertRequest, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		request, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("batch-machine-%d", i+1)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
@@ -238,7 +238,7 @@ func Example6_PerformanceMonitoring() {
 	monitor := NewPerformanceMonitor()
 
 	// 模拟操作并记录性能
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		start := time.Now()
 
 		// 模拟证书签发操作
@@ -249,7 +249,7 @@ func Example6_PerformanceMonitoring() {
 	}
 
 	// 模拟验证操作
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		start := time.Now()
 
 		// 模拟证书验证操作

@@ -2,6 +2,7 @@ package cert
 
 import (
 	"container/list"
+	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"sync"
@@ -301,6 +302,14 @@ func (ca *CachedAuthorizer) CacheHitRate() float64 {
 	return ca.cache.HitRate()
 }
 
+// Close 释放缓存后台资源。
+//
+// WithCache / BuildWithCache 创建的 CachedAuthorizer 会启动一个后台清理协程，
+// 不再使用时应调用 Close 停止该协程，避免 goroutine 泄漏。
+func (ca *CachedAuthorizer) Close() {
+	ca.cache.Close()
+}
+
 // 添加缓存配置构建器方法
 func (b *AuthorizerBuilder) WithCacheConfig(config CacheConfig) *AuthorizerBuilder {
 	b.config.Cache = config
@@ -336,12 +345,26 @@ type SignedValidationCache struct {
 	signKey []byte // 签名密钥
 }
 
-// NewSignedValidationCache 创建带签名的验证缓存
+// NewSignedValidationCache 创建带签名的验证缓存。
+//
+// signKey 是用于对缓存条目计算 HMAC-SHA256 的密钥，必须非空且由调用方妥善保管。
+// 传入空 signKey 不会在构造时报错（保持 API 兼容），但签名/验签将失去意义；
+// 调用方有责任传入高强度密钥。
 func NewSignedValidationCache(config CacheConfig, signKey []byte) *SignedValidationCache {
 	return &SignedValidationCache{
 		ValidationCache: NewValidationCache(config),
 		signKey:         signKey,
 	}
+}
+
+// calculateEntrySignature 用 HMAC-SHA256 计算缓存条目签名。
+//
+// 早期实现使用 sha256(signKey || data) 的裸拼接，属于易受 length-extension 影响的弱 MAC
+// 构造，且与字段注释中宣称的 "HMAC-SHA256" 不符；这里改用标准 crypto/hmac。
+func (svc *SignedValidationCache) calculateEntrySignature(signatureData string) string {
+	h := hmac.New(sha256.New, svc.signKey)
+	h.Write([]byte(signatureData))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // StoreWithSignature 带签名存储缓存条目
@@ -373,17 +396,15 @@ func (svc *SignedValidationCache) StoreWithSignature(
 	dataHash := svc.generateKey(certPEM, machineID)
 
 	// 计算签名
-	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+	signatureData := fmt.Sprintf(
+		"%s|%s|%s|%s",
 		dataHash,
 		machineID,
 		entry.CreatedAt.Format(time.RFC3339),
 		entry.ExpiresAt.Format(time.RFC3339),
 	)
 
-	h := sha256.New()
-	h.Write(svc.signKey)
-	h.Write([]byte(signatureData))
-	signature := fmt.Sprintf("%x", h.Sum(nil))
+	signature := svc.calculateEntrySignature(signatureData)
 
 	// 创建签名缓存条目
 	signedEntry := &SignedCacheEntry{
@@ -451,17 +472,15 @@ func (svc *SignedValidationCache) GetWithVerification(
 	}
 
 	// 重新计算签名并验证
-	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+	signatureData := fmt.Sprintf(
+		"%s|%s|%s|%s",
 		signedEntry.DataHash,
 		signedEntry.MachineID,
 		signedEntry.CreatedAt.Format(time.RFC3339),
 		signedEntry.ExpiresAt.Format(time.RFC3339),
 	)
 
-	h := sha256.New()
-	h.Write(svc.signKey)
-	h.Write([]byte(signatureData))
-	expectedSignature := fmt.Sprintf("%x", h.Sum(nil))
+	expectedSignature := svc.calculateEntrySignature(signatureData)
 
 	if signedEntry.Signature != expectedSignature {
 		return fmt.Errorf("signature verification failed"), false
@@ -499,17 +518,15 @@ func (svc *SignedValidationCache) ExportSignedEntry(
 	// 构建签名条目
 	dataHash := svc.generateKey(certPEM, machineID)
 
-	signatureData := fmt.Sprintf("%s|%s|%s|%s",
+	signatureData := fmt.Sprintf(
+		"%s|%s|%s|%s",
 		dataHash,
 		machineID,
 		entry.CreatedAt.Format(time.RFC3339),
 		entry.ExpiresAt.Format(time.RFC3339),
 	)
 
-	h := sha256.New()
-	h.Write(svc.signKey)
-	h.Write([]byte(signatureData))
-	signature := fmt.Sprintf("%x", h.Sum(nil))
+	signature := svc.calculateEntrySignature(signatureData)
 
 	return &SignedCacheEntry{
 		CacheEntry: entry,

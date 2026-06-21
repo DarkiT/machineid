@@ -47,7 +47,6 @@ func TestBatchManager_WithMaxWorkers(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			bm := auth.NewBatchManager().WithMaxWorkers(tt.workers)
 			if bm.maxWorkers != tt.expected {
@@ -86,7 +85,7 @@ func TestBatchManager_IssueMultipleCerts_Success(t *testing.T) {
 
 	// 准备多个证书请求
 	var requests []*ClientCertRequest
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("batch-machine-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
@@ -137,7 +136,7 @@ func TestBatchManager_IssueMultipleCerts_Concurrent(t *testing.T) {
 
 	// 准备大量请求
 	var requests []*ClientCertRequest
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("concurrent-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
@@ -205,7 +204,7 @@ func TestBatchManager_ValidateMultipleCerts_Success(t *testing.T) {
 
 	// 先签发一些证书
 	var validations []CertValidation
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		machineID := fmt.Sprintf("validate-machine-%d", i)
 		req, err := NewClientRequest().
 			WithMachineID(machineID).
@@ -316,7 +315,7 @@ func TestBatchIssueBuilder_AddRequests(t *testing.T) {
 	}
 
 	var requests []*ClientCertRequest
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		req, err := NewClientRequest().
 			WithMachineID(fmt.Sprintf("test-multi-%d", i)).
 			WithExpiry(time.Now().AddDate(1, 0, 0)).
@@ -541,7 +540,6 @@ func TestIssueStats(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stats := IssueStats(tt.results)
 
@@ -617,7 +615,6 @@ func TestValidationStats(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stats := ValidationStats(tt.results)
 

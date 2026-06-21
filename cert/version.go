@@ -13,7 +13,13 @@ type version struct {
 	segments []int  // 版本号数字段
 }
 
-// 版本号缓存
+// 版本号缓存。
+//
+// parse 会缓存解析结果以加速 compare。由于 version 字符串可能来自外部输入
+// （证书扩展、吊销列表的 MinVersion 等），这里限制缓存条目数，避免攻击者用大量
+// 随机版本串撑爆内存（DoS）。
+const maxVersionCacheSize = 1024
+
 var (
 	versionCache = make(map[string]*version)
 	cacheMutex   sync.RWMutex
@@ -65,7 +71,7 @@ func (v *version) compare(other *version) int {
 	maxLen := max(len(v.segments), len(other.segments))
 
 	// 遍历两个版本号的每个部分
-	for i := 0; i < maxLen; i++ {
+	for i := range maxLen {
 		// 获取当前版本号的部分
 		v1 := 0
 		if i < len(v.segments) {
@@ -126,13 +132,6 @@ func (v *version) String() string {
 	return v.raw
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // parse 解析版本号字符串
 func parse(v string) (*version, error) {
 	if v == "" {
@@ -168,9 +167,11 @@ func parse(v string) (*version, error) {
 		segments: segments,
 	}
 
-	// 更新缓存
+	// 更新缓存（限制大小，避免外部输入导致无界增长）
 	cacheMutex.Lock()
-	versionCache[v] = ver
+	if len(versionCache) < maxVersionCacheSize {
+		versionCache[v] = ver
+	}
 	cacheMutex.Unlock()
 
 	return ver, nil

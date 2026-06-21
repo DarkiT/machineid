@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package cert
 
@@ -9,6 +8,7 @@ import (
 )
 
 // mprotect 在 Linux 环境下设置内存页权限
+//
 //nolint:unused // 预留接口，避免静态检查误报
 func (sm *SecurityManager) mprotect() error {
 	ptr := uintptr(unsafe.Pointer(&sm.memProtect[0]))
@@ -24,6 +24,7 @@ func (sm *SecurityManager) mprotect() error {
 }
 
 // mprotectReadWrite 将内存页权限恢复为可读写（用于需要修改内存时）
+//
 //nolint:unused // 预留接口，避免静态检查误报
 func (sm *SecurityManager) mprotectReadWrite() error {
 	if len(sm.memProtect) == 0 {

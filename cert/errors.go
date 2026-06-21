@@ -80,12 +80,12 @@ const (
 
 // CertError 证书错误
 type CertError struct {
-	Type        ErrorType              // 错误类型
-	Code        ErrorCode              // 错误代码
-	Message     string                 // 错误消息
-	Details     map[string]interface{} // 错误详情
-	Cause       error                  // 原始错误
-	Suggestions []string               // 解决建议
+	Type        ErrorType      // 错误类型
+	Code        ErrorCode      // 错误代码
+	Message     string         // 错误消息
+	Details     map[string]any // 错误详情
+	Cause       error          // 原始错误
+	Suggestions []string       // 解决建议
 }
 
 // Error 实现 error 接口
@@ -119,7 +119,7 @@ func (e *CertError) ErrorCode() ErrorCode {
 }
 
 // ErrorDetails 返回错误详情
-func (e *CertError) ErrorDetails() map[string]interface{} {
+func (e *CertError) ErrorDetails() map[string]any {
 	return e.Details
 }
 
@@ -168,7 +168,7 @@ func NewValidationError(code ErrorCode, message string, cause error) *CertError 
 		Code:    code,
 		Message: message,
 		Cause:   cause,
-		Details: make(map[string]interface{}),
+		Details: make(map[string]any),
 	}
 	err.addValidationSuggestions()
 	return err
@@ -181,7 +181,7 @@ func NewSecurityError(code ErrorCode, message string, cause error) *CertError {
 		Code:    code,
 		Message: message,
 		Cause:   cause,
-		Details: make(map[string]interface{}),
+		Details: make(map[string]any),
 	}
 	err.addSecuritySuggestions()
 	return sanitizeSecurityError(err)
@@ -194,7 +194,7 @@ func NewConfigError(code ErrorCode, message string, cause error) *CertError {
 		Code:    code,
 		Message: message,
 		Cause:   cause,
-		Details: make(map[string]interface{}),
+		Details: make(map[string]any),
 	}
 	err.addConfigSuggestions()
 	return err
@@ -207,7 +207,7 @@ func NewCertificateError(code ErrorCode, message string, cause error) *CertError
 		Code:    code,
 		Message: message,
 		Cause:   cause,
-		Details: make(map[string]interface{}),
+		Details: make(map[string]any),
 	}
 	err.addCertificateSuggestions()
 	return err
@@ -220,14 +220,14 @@ func NewSystemError(code ErrorCode, message string, cause error) *CertError {
 		Code:    code,
 		Message: message,
 		Cause:   cause,
-		Details: make(map[string]interface{}),
+		Details: make(map[string]any),
 	}
 	err.addSystemSuggestions()
 	return err
 }
 
 // WithDetail 添加错误详情
-func (e *CertError) WithDetail(key string, value interface{}) *CertError {
+func (e *CertError) WithDetail(key string, value any) *CertError {
 	e.Details[key] = value
 	return sanitizeSecurityError(e)
 }

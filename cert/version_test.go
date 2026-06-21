@@ -20,7 +20,6 @@ func TestCompareOperators(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.op+tc.v1+tc.v2, func(t *testing.T) {
 			got, err := compare(tc.v1, tc.op, tc.v2)
 			if err != nil {

@@ -361,10 +361,13 @@ func WithHardwareBinding(mode string) Option {
 	}
 }
 
-// WithContainerSupport 配置容器环境支持
+// WithContainerSupport 配置容器环境支持。
+//
+// ⚠ 兼容性说明：容器绑定配置已下沉到 machineid 包，本 Option 仅为向后兼容保留，
+// 传入的 config 参数当前不生效。
 //
 // 参数：
-//   - config: 容器绑定配置
+//   - config: 容器绑定配置（保留参数，当前未使用）
 //
 // 使用示例：
 //
@@ -373,7 +376,7 @@ func WithHardwareBinding(mode string) Option {
 //	    PreferHostHardware:  true,
 //	    FallbackToContainer: true,
 //	})
-func WithContainerSupport(config interface{}) Option {
+func WithContainerSupport(config any) Option {
 	return func(b *AuthorizerBuilder) *AuthorizerBuilder {
 		// 容器支持配置已集成到 machineid 包中
 		// 这里主要用于文档和向后兼容
@@ -381,10 +384,13 @@ func WithContainerSupport(config interface{}) Option {
 	}
 }
 
-// WithOfflineValidation 配置离线验证支持
+// WithOfflineValidation 配置离线验证支持。
+//
+// ⚠ 兼容性说明：本 Option 仅会启用时间验证与硬件绑定；传入的 snapshotPath 当前不生效，
+// 快照能力请直接使用 snapshot.go 的 CreateSnapshot / VerifySnapshot。
 //
 // 参数：
-//   - snapshotPath: 硬件快照存储路径
+//   - snapshotPath: 硬件快照存储路径（保留参数，当前未使用）
 //
 // 使用示例：
 //
@@ -398,10 +404,13 @@ func WithOfflineValidation(snapshotPath string) Option {
 	}
 }
 
-// WithMonotonicTime 配置单调时间检查
+// WithMonotonicTime 配置单调时间检查。
+//
+// ⚠ 兼容性说明：本 Option 仅会启用时间验证并设置时钟偏差；传入的 persistencePath 当前不生效，
+// 单调时间能力请直接使用 MonotonicTime（security.go）。
 //
 // 参数：
-//   - persistencePath: 时间戳持久化路径
+//   - persistencePath: 时间戳持久化路径（保留参数，当前未使用）
 //   - maxClockSkew: 允许的最大时钟偏差
 //
 // 使用示例：
@@ -415,10 +424,13 @@ func WithMonotonicTime(persistencePath string, maxClockSkew time.Duration) Optio
 	}
 }
 
-// WithSignedCache 配置带签名的缓存
+// WithSignedCache 配置带签名的缓存。
+//
+// ⚠ 兼容性说明：本 Option 仅会设置缓存配置；传入的 signKey 当前不生效，
+// 签名缓存请直接使用 NewSignedValidationCache。
 //
 // 参数：
-//   - signKey: 签名密钥
+//   - signKey: 签名密钥（保留参数，当前未使用）
 //   - config: 缓存配置
 //
 // 使用示例：

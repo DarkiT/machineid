@@ -38,7 +38,7 @@ func sanitizeSecurityError(err *CertError) *CertError {
 	// - suggestions 清空
 	// - cause 清空（避免透出 syscall/路径/内部实现信息）
 	err.Message = "security check failed"
-	err.Details = make(map[string]interface{})
+	err.Details = make(map[string]any)
 	err.Suggestions = nil
 	err.Cause = nil
 	return err

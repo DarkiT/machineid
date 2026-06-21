@@ -99,7 +99,6 @@ func TestAuthorizerBuilder_WithSecurityLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -307,7 +306,7 @@ func TestAuthorizerConcurrentBuild(t *testing.T) {
 	concurrency := 10
 	done := make(chan error, concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		go func() {
 			_, err := newTestAuthorizerBuilder(t).
 				WithRuntimeVersion("1.0.0").
@@ -317,7 +316,7 @@ func TestAuthorizerConcurrentBuild(t *testing.T) {
 	}
 
 	// 等待所有 goroutine 完成
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		if err := <-done; err != nil {
 			t.Errorf("并发构建授权管理器失败: %v", err)
 		}

@@ -240,8 +240,8 @@ func (req *ClientCertRequest) Validate() error {
 	}
 
 	// 验证机器码格式（可以是多个，用逗号分隔）
-	machineIDs := strings.Split(req.Identity.MachineID, ",")
-	for _, id := range machineIDs {
+	machineIDs := strings.SplitSeq(req.Identity.MachineID, ",")
+	for id := range machineIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			return errors.New("empty machine ID found in machine ID list")
@@ -261,8 +261,8 @@ func (req *ClientCertRequest) MachineIDs() []string {
 	}
 
 	var result []string
-	machineIDs := strings.Split(req.Identity.MachineID, ",")
-	for _, id := range machineIDs {
+	machineIDs := strings.SplitSeq(req.Identity.MachineID, ",")
+	for id := range machineIDs {
 		id = strings.TrimSpace(id)
 		if id != "" {
 			result = append(result, id)

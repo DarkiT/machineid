@@ -303,12 +303,7 @@ func isLicenseJSON(data []byte) bool {
 	return bytes.Contains(data, []byte(`"payload"`)) && bytes.Contains(data, []byte(`"signature"`))
 }
 
-// asn1Unmarshal 是 encoding/asn1.Unmarshal 的包装
+// asn1Unmarshal 是 encoding/asn1.Unmarshal 的薄包装，保留独立函数便于调用点统一与后续扩展。
 func asn1Unmarshal(data []byte, val any) ([]byte, error) {
-	return asn1UnmarshalReal(data, val)
-}
-
-// asn1UnmarshalReal 实际的 ASN.1 解码实现
-func asn1UnmarshalReal(data []byte, val any) ([]byte, error) {
 	return asn1.Unmarshal(data, val)
 }

@@ -344,11 +344,11 @@ func TestRevokeManager_ConcurrentAccess(t *testing.T) {
 	const operations = 100
 
 	// 并发添加
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < operations; j++ {
+			for j := range operations {
 				serial := "SERIAL_" + string(rune('A'+id)) + "_" + string(rune('0'+j%10))
 				rm.AddRevocation(serial, "并发测试")
 			}
@@ -356,11 +356,11 @@ func TestRevokeManager_ConcurrentAccess(t *testing.T) {
 	}
 
 	// 并发检查
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < operations; j++ {
+			for j := range operations {
 				serial := "SERIAL_" + string(rune('A'+id)) + "_" + string(rune('0'+j%10))
 				rm.IsRevoked(serial)
 			}
@@ -368,14 +368,12 @@ func TestRevokeManager_ConcurrentAccess(t *testing.T) {
 	}
 
 	// 并发获取列表
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < operations; j++ {
+	for range goroutines {
+		wg.Go(func() {
+			for range operations {
 				rm.GetRevokeList()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

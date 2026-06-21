@@ -61,18 +61,13 @@ func (bm *BatchManager) IssueMultipleCerts(requests []*ClientCertRequest) []Batc
 	var wg sync.WaitGroup
 
 	// 启动工作器
-	workers := bm.maxWorkers
-	if len(requests) < workers {
-		workers = len(requests)
-	}
+	workers := min(len(requests), bm.maxWorkers)
 	// 注：原有单线程限制已移除。
 	// 经过并发安全测试验证，Ed25519 密钥生成和 X.509 证书签发在多线程环境下是安全的。
 	// 如遇到特殊环境下的稳定性问题，可通过 WithMaxWorkers(1) 显式限制为单线程。
 
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for index := range jobs {
 				start := time.Now()
 				cert, err := bm.auth.IssueClientCert(requests[index])
@@ -83,7 +78,7 @@ func (bm *BatchManager) IssueMultipleCerts(requests []*ClientCertRequest) []Batc
 					Duration:    time.Since(start),
 				}
 			}
-		}()
+		})
 	}
 
 	// 分发任务
@@ -109,15 +104,10 @@ func (bm *BatchManager) ValidateMultipleCerts(validations []CertValidation) []Va
 	var wg sync.WaitGroup
 
 	// 启动工作器
-	workers := bm.maxWorkers
-	if len(validations) < workers {
-		workers = len(validations)
-	}
+	workers := min(len(validations), bm.maxWorkers)
 
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for index := range jobs {
 				start := time.Now()
 				val := validations[index]
@@ -130,7 +120,7 @@ func (bm *BatchManager) ValidateMultipleCerts(validations []CertValidation) []Va
 					MachineID: val.MachineID,
 				}
 			}
-		}()
+		})
 	}
 
 	// 分发任务

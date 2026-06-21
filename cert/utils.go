@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -333,8 +334,8 @@ func IsValidMachineID(machineID string) bool {
 	}
 
 	// 检查是否包含逗号分隔的多个ID
-	ids := strings.Split(machineID, ",")
-	for _, id := range ids {
+	ids := strings.SplitSeq(machineID, ",")
+	for id := range ids {
 		id = strings.TrimSpace(id)
 		if len(id) < 8 {
 			return false
@@ -409,8 +410,11 @@ func (ccv *CertificateChainValidator) ValidateChain(certPEMs [][]byte) error {
 	return nil
 }
 
-// PerformanceMonitor 性能监控器
+// PerformanceMonitor 性能监控器。
+//
+// 并发安全：内部用互斥锁保护 operations，RecordOperation/Stats/Reset 可被多 goroutine 并发调用。
 type PerformanceMonitor struct {
+	mu         sync.Mutex
 	operations map[string]*OperationStats
 }
 
@@ -434,6 +438,9 @@ func NewPerformanceMonitor() *PerformanceMonitor {
 
 // RecordOperation 记录操作性能
 func (pm *PerformanceMonitor) RecordOperation(name string, duration time.Duration) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
 	stats, exists := pm.operations[name]
 	if !exists {
 		stats = &OperationStats{
@@ -460,6 +467,9 @@ func (pm *PerformanceMonitor) RecordOperation(name string, duration time.Duratio
 
 // Stats 获取统计信息
 func (pm *PerformanceMonitor) Stats() map[string]*OperationStats {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
 	result := make(map[string]*OperationStats)
 	for name, stats := range pm.operations {
 		// 复制统计数据
@@ -471,5 +481,7 @@ func (pm *PerformanceMonitor) Stats() map[string]*OperationStats {
 
 // Reset 重置统计
 func (pm *PerformanceMonitor) Reset() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	pm.operations = make(map[string]*OperationStats)
 }

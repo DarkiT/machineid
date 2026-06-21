@@ -87,7 +87,6 @@ func TestSecurityManager_DifferentLevels(t *testing.T) {
 	}
 
 	for _, level := range levels {
-		level := level
 		t.Run(fmt.Sprintf("级别%d", level), func(t *testing.T) {
 			// NewSecurityManager 会启动后台 goroutine 与分配内存，
 			// 在并行测试中可能引发运行时不稳定（尤其在资源受限环境）。
@@ -152,7 +151,6 @@ func TestPerformSecurityCheck(t *testing.T) {
 	}
 
 	for _, level := range levels {
-		level := level
 		t.Run(fmt.Sprintf("检查级别%d", level), func(t *testing.T) {
 			t.Parallel()
 
@@ -390,7 +388,6 @@ func TestSecurityLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -506,7 +503,6 @@ func TestProtectProcess_AllLevels(t *testing.T) {
 	}
 
 	for _, level := range levels {
-		level := level
 		t.Run(fmt.Sprintf("保护级别%d", level), func(t *testing.T) {
 			t.Parallel()
 
@@ -563,11 +559,8 @@ func TestSecurityManager_MultipleConcurrent(t *testing.T) {
 
 	// 并发执行多个操作
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+	for range 10 {
+		wg.Go(func() {
 			// 并发验证完整性
 			if err := sm.VerifyIntegrity(); err != nil {
 				t.Logf("并发校验返回: %v", err)
@@ -575,7 +568,7 @@ func TestSecurityManager_MultipleConcurrent(t *testing.T) {
 
 			// 并发获取内存区域
 			sm.getCriticalMemoryRegions()
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -608,7 +601,6 @@ func TestDetectPlatformSpecific(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 

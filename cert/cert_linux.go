@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package cert
 
@@ -18,10 +17,10 @@ var checkDebugger = func() bool {
 		return false
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "TracerPid:") {
-			pid := strings.TrimSpace(strings.TrimPrefix(line, "TracerPid:"))
+	lines := strings.SplitSeq(string(data), "\n")
+	for line := range lines {
+		if after, ok := strings.CutPrefix(line, "TracerPid:"); ok {
+			pid := strings.TrimSpace(after)
 			return pid != "0"
 		}
 	}

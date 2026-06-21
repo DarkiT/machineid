@@ -538,23 +538,16 @@ func (a *Authorizer) SaveClientCert(cert *Certificate, dirPath ...string) error 
 	startTime := cert.NotBefore.Format("20060102")
 	endTime := cert.NotAfter.Format("20060102")
 
-	// 构建文件名
+	// 构建文件名（仅保存证书；客户端私钥不下发，由调用方按需自行处理）
 	certFileName := fmt.Sprintf("%s-%s-%s.crt", cert.MachineID, startTime, endTime)
-	// keyFileName := fmt.Sprintf("%s-%s-%s.key", cert.MachineID, startTime, endTime)
 
 	// 构建完整路径
 	certPath := filepath.Join(saveDir, certFileName)
-	// keyPath := filepath.Join(saveDir, keyFileName)
 
 	// 保存证书
 	if err := os.WriteFile(certPath, cert.CertPEM, 0o644); err != nil {
 		return fmt.Errorf("failed to save client certificate: %v", err)
 	}
-
-	// 保存私钥
-	//if err := os.WriteFile(keyPath, cert.KeyPEM, 0600); err != nil {
-	//	return fmt.Errorf("failed to save client private key: %v", err)
-	//}
 
 	return nil
 }
@@ -600,10 +593,28 @@ func (a *Authorizer) initCA() error {
 	return nil
 }
 
+// randomSerialNumber 生成符合 X.509 要求的正随机序列号，取值范围 [1, 2^128)。
+//
+// 使用 crypto/rand 而非 time.Now().UnixNano()，避免同一纳秒并发签发多张证书
+// （如批量签发场景）时序列号碰撞。RFC 5280 §4.1.2.2 要求 CA 签发的每张证书序列号唯一，
+// 且必须是正整数——因此这里在 [0, 2^128-1) 取随机后 +1，确保永不为 0（rand.Int 返回 [0, max)
+// 含 0，直接用会生成不合规证书）。
+func randomSerialNumber() *big.Int {
+	// limit = 2^128 - 1；rand.Int 返回 [0, limit)，再 +1 得到 [1, 2^128)。
+	limit := new(big.Int).Lsh(big.NewInt(1), 128)
+	limit.Sub(limit, big.NewInt(1))
+	n, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		// crypto/rand 极少失败；为保证签发流程可用，退化为纳秒时间戳（必为正）。
+		return big.NewInt(time.Now().UnixNano())
+	}
+	return n.Add(n, big.NewInt(1)) // [1, 2^128)
+}
+
 // createCertificateTemplate 创建证书模板
 func createCertificateTemplate(info CAInfo) *x509.Certificate {
 	return &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		SerialNumber: randomSerialNumber(),
 		Subject: pkix.Name{
 			CommonName:   info.CommonName,
 			Organization: []string{info.Organization},
@@ -649,7 +660,7 @@ func (a *Authorizer) createCertificateTemplate(req *ClientCertRequest, _ any) *x
 	}
 
 	return &x509.Certificate{
-		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		SerialNumber:          randomSerialNumber(),
 		Subject:               subject,
 		NotBefore:             time.Now(),
 		NotAfter:              req.Identity.ExpiryDate,

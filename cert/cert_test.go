@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
@@ -255,8 +256,8 @@ func TestValidateCert_MachineIDNotAuthorizedReturnsExpectedCode(t *testing.T) {
 	}
 
 	req := &ClientCertRequest{
-		Identity: &Identity{MachineID: "authorized-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
-		Company:  &Company{Name: "Test", Department: "Test"},
+		Identity:  &Identity{MachineID: "authorized-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:   &Company{Name: "Test", Department: "Test"},
 		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
 	}
 	issued, err := auth.IssueClientCert(req)
@@ -315,8 +316,8 @@ func TestValidateCert_CertVersionMismatchReturnsExpectedCode(t *testing.T) {
 
 	machineID := "test-machine"
 	req := &ClientCertRequest{
-		Identity: &Identity{MachineID: machineID, ExpiryDate: time.Now().Add(24 * time.Hour)},
-		Company:  &Company{Name: "Test", Department: "Test"},
+		Identity:  &Identity{MachineID: machineID, ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:   &Company{Name: "Test", Department: "Test"},
 		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
 	}
 	issued, err := auth.IssueClientCert(req)
@@ -350,8 +351,8 @@ func TestValidateCert_VersionTooOldReturnsExpectedCode(t *testing.T) {
 	}
 
 	req := &ClientCertRequest{
-		Identity: &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
-		Company:  &Company{Name: "Test", Department: "Test"},
+		Identity:  &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:   &Company{Name: "Test", Department: "Test"},
 		Technical: &Technical{MinClientVersion: "2.0.0", ValidityPeriodDays: 1},
 	}
 	issued, err := auth.IssueClientCert(req)
@@ -460,6 +461,27 @@ func extractSerialNumber(certPEM []byte) (string, error) {
 	return cert.SerialNumber.String(), nil
 }
 
+// TestRandomSerialNumber_AlwaysPositive 验证证书序列号始终为正整数且不超过 128 位。
+//
+// RFC 5280 §4.1.2.2 要求 serialNumber 必须为正整数。randomSerialNumber 取值范围为 [1, 2^128)，
+// 多次采样回归保护其数学合约（注意：单次返回 0 的概率为 1/2^128，采样无法覆盖该边界，
+// 本测试主要防止结构性回归与上界越界）。
+func TestRandomSerialNumber_AlwaysPositive(t *testing.T) {
+	t.Parallel()
+
+	const samples = 1000
+	upperBound := new(big.Int).Lsh(big.NewInt(1), 128) // 2^128，开区间上界
+	for i := range samples {
+		n := randomSerialNumber()
+		if n.Sign() <= 0 {
+			t.Fatalf("第 %d 次采样: 序列号必须为正整数, 得到 %v", i, n)
+		}
+		if n.Cmp(upperBound) >= 0 {
+			t.Fatalf("第 %d 次采样: 序列号超出 128 位上界, 得到 %v", i, n)
+		}
+	}
+}
+
 // TestValidateCert_InvalidPEM 测试无效的PEM格式
 func TestValidateCert_InvalidPEM(t *testing.T) {
 	t.Parallel()
@@ -492,7 +514,6 @@ MIIBkTCB+wIBATANBgkqhkiG9w0BAQsFADBFMQswCQYDVQQGEwJDTjEQMA4GA1UE
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -520,8 +541,8 @@ func TestValidateCert_CertificateNotTrustedReturnsExpectedCode(t *testing.T) {
 	}
 
 	req := &ClientCertRequest{
-		Identity: &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
-		Company:  &Company{Name: "Test", Department: "Test"},
+		Identity:  &Identity{MachineID: "test-machine", ExpiryDate: time.Now().Add(24 * time.Hour)},
+		Company:   &Company{Name: "Test", Department: "Test"},
 		Technical: &Technical{MinClientVersion: "0.0.0", ValidityPeriodDays: 1},
 	}
 	issued, err := otherAuth.IssueClientCert(req)
@@ -727,7 +748,7 @@ func TestConcurrentCertIssue(t *testing.T) {
 	concurrency := 4
 	done := make(chan error, concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		i := i
 		go func() {
 			machineID := fmt.Sprintf("concurrent-machine-%d", i)
@@ -749,7 +770,7 @@ func TestConcurrentCertIssue(t *testing.T) {
 	}
 
 	// 等待所有 goroutine 完成
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		if err := <-done; err != nil {
 			t.Errorf("并发签发证书失败: %v", err)
 		}

@@ -2,6 +2,7 @@ package cert
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -148,14 +149,16 @@ func (w *CertWatcher) IsRunning() bool {
 }
 
 // Stats 获取监控统计信息
-func (w *CertWatcher) Stats() map[string]interface{} {
+func (w *CertWatcher) Stats() map[string]any {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
 	var lastErrorType string
 	var lastErrorCode string
-	var lastErrorDetails map[string]interface{}
-	if ce, ok := w.lastError.(*CertError); ok {
+	var lastErrorDetails map[string]any
+	// 用 errors.As 而非裸类型断言，兼容被 fmt.Errorf("%w", ...) 包装的错误。
+	var ce *CertError
+	if errors.As(w.lastError, &ce) {
 		lastErrorType = ce.getTypeString()
 		lastErrorCode = string(ce.Code)
 		if len(ce.Details) > 0 {
@@ -163,15 +166,15 @@ func (w *CertWatcher) Stats() map[string]interface{} {
 		}
 	}
 
-	return map[string]interface{}{
-		"is_running":     w.isRunning,
-		"last_check":     w.lastCheck,
-		"last_error":     w.lastError,
-		"last_error_type": lastErrorType,
-		"last_error_code": lastErrorCode,
+	return map[string]any{
+		"is_running":         w.isRunning,
+		"last_check":         w.lastCheck,
+		"last_error":         w.lastError,
+		"last_error_type":    lastErrorType,
+		"last_error_code":    lastErrorCode,
 		"last_error_details": lastErrorDetails,
-		"check_count":    w.checkCount,
-		"check_interval": w.config.CheckInterval,
+		"check_count":        w.checkCount,
+		"check_interval":     w.config.CheckInterval,
 	}
 }
 
@@ -269,7 +272,16 @@ func (w *CertWatcher) handleError(event WatchEvent, clientInfo *ClientInfo, err 
 
 	// 实现简单的重试机制
 	for i := 0; i < w.config.MaxRetries; i++ {
-		time.Sleep(w.config.RetryInterval)
+		// 重试等待必须响应 ctx 取消，否则 Stop()->cancel()->wg.Wait() 会被卡到
+		// 重试全部跑完（默认 3 × 5min = 15min），造成 goroutine 泄漏与关闭阻塞。
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-time.After(w.config.RetryInterval):
+		}
+		if ctxErr := w.ctx.Err(); ctxErr != nil {
+			return
+		}
 
 		// 重新验证
 		if validateErr := w.auth.ValidateCert(w.certPEM, w.machineID); validateErr == nil {
@@ -364,11 +376,11 @@ func (wm *WatcherManager) StopAll() {
 }
 
 // AllStats 获取所有监控器的统计信息
-func (wm *WatcherManager) AllStats() map[string]map[string]interface{} {
+func (wm *WatcherManager) AllStats() map[string]map[string]any {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	stats := make(map[string]map[string]interface{})
+	stats := make(map[string]map[string]any)
 	for id, watcher := range wm.watchers {
 		stats[id] = watcher.Stats()
 	}

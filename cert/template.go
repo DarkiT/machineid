@@ -2,6 +2,7 @@ package cert
 
 import (
 	"crypto/x509"
+	"maps"
 	"time"
 )
 
@@ -134,9 +135,7 @@ func (tm *TemplateManager) AddTemplate(name string, template *CertTemplate) erro
 // ListTemplates 列出所有可用模板
 func (tm *TemplateManager) ListTemplates() map[string]*CertTemplate {
 	result := make(map[string]*CertTemplate)
-	for name, template := range tm.templates {
-		result[name] = template
-	}
+	maps.Copy(result, tm.templates)
 	return result
 }
 

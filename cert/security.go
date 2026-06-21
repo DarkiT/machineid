@@ -141,7 +141,7 @@ func detectSystemCallTracing() bool {
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(line, "TracerPid:") {
 			fields := strings.Fields(line)
 			return len(fields) >= 2 && fields[1] != "0"
@@ -293,8 +293,8 @@ func detectLinuxDebugger(debuggerNames []string) bool {
 	if data, err := os.ReadFile("/proc/self/status"); err == nil {
 		content := string(data)
 		if strings.Contains(content, "TracerPid:") {
-			lines := strings.Split(content, "\n")
-			for _, line := range lines {
+			lines := strings.SplitSeq(content, "\n")
+			for line := range lines {
 				if strings.HasPrefix(line, "TracerPid:") {
 					parts := strings.Fields(line)
 					if len(parts) >= 2 && parts[1] != "0" {
@@ -409,8 +409,12 @@ func (sm *SecurityManager) backgroundSecurityCheck() {
 					sm.debuggerCount++
 				}
 
-				// 检查内存完整性
-				if !sm.verifyMemoryIntegrity() {
+				// 检查内存完整性。
+				// 注意：此处已持有 sm.mu 写锁，必须调用 *Locked 变体，
+				// 不能再走 verifyMemoryIntegrity() 内部的 RLock——
+				// Go 的 sync.RWMutex 不允许同一 goroutine 在持写锁时再获取读锁，否则会自死锁，
+				// 进而导致 mu 永久无法释放、Check()/Close() 全部挂起。
+				if !sm.verifyMemoryIntegrityLocked() {
 					sm.debuggerCount++
 				}
 			}
@@ -435,10 +439,16 @@ func (sm *SecurityManager) calculateChecksum() {
 func (sm *SecurityManager) verifyMemoryIntegrity() bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	return sm.verifyMemoryIntegrityLocked()
+}
 
+// verifyMemoryIntegrityLocked 在调用方已持有 sm.mu（读或写锁）的前提下校验内存完整性。
+//
+// 提取该变体是为了避免 backgroundSecurityCheck 在持有写锁时递归获取读锁造成的自死锁。
+func (sm *SecurityManager) verifyMemoryIntegrityLocked() bool {
 	hash := sha256.Sum256(sm.memProtect)
 	// SHA-256 输出 32 字节，与 checksum 长度匹配
-	for i := 0; i < len(hash); i++ {
+	for i := range len(hash) {
 		if sm.checksum[i] != hash[i] {
 			return false
 		}

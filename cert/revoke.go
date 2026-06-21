@@ -124,7 +124,12 @@ func (rm *RevokeManager) IsRevoked(serialNumber string) (bool, string) {
 		return true, info.RevokeReason
 	}
 
-	// 检查当前版本是否满足最低版本要求
+	// 检查当前版本是否满足最低版本要求。
+	//
+	// 版本比较失败（格式非法等）时不视为吊销：currentVer 来自程序自身版本、MinVersion
+	// 来自服务端签发的吊销列表，二者均受控，畸形版本绕过风险极低；而 "dev"/"test" 等开发
+	// 占位版本会触发 parse 失败，fail-closed 会误伤开发/测试环境。因此这里保持宽容策略，
+	// 仅在比较成功且确实 currentVer < MinVersion 时吊销。
 	if rm.revokeList.MinVersion != "" && rm.currentVer != "" {
 		if ok, err := compare(rm.currentVer, "<", rm.revokeList.MinVersion); err == nil && ok {
 			return true, "program version too old"

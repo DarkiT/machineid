@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	machineid "github.com/darkit/machineid"
@@ -49,10 +50,16 @@ const (
 	DefaultSnapshotValidity = 90 * 24 * time.Hour
 )
 
-// CreateSnapshot 创建硬件快照
+// CreateSnapshot 创建硬件快照。
+//
+// ⚠ 安全约束：当前签名密钥由 appID 与本机 machineID 拼接派生，machineID 在签发与验证
+// 两侧均从本机实时读取。这意味着同一 appID 的另一台机器无法直接复用本快照（machineID
+// 不同会导致签名校验失败），但签名本身不绑定任何服务端私密钥，不能抵御"在同 machineID
+// 环境下重放"。如需强防伪造，应结合服务端签名（类比 license.go 的 Ed25519 私钥）或
+// 额外的密钥派生层。
 //
 // 参数：
-//   - appID: 应用标识符（用于生成签名密钥）
+//   - appID: 应用标识符（参与生成签名密钥）
 //   - validity: 快照有效期（传 0 使用默认 90 天）
 //
 // 返回快照对象和错误
@@ -152,7 +159,8 @@ func VerifySnapshot(snapshot *HardwareSnapshot, appID string, allowedDeviation f
 // calculateSignature 计算快照签名
 func (s *HardwareSnapshot) calculateSignature(key string) string {
 	// 构建待签名数据
-	data := fmt.Sprintf("%s|%v|%s|%s|%d",
+	data := fmt.Sprintf(
+		"%s|%v|%s|%s|%d",
 		s.Fingerprint,
 		s.Components,
 		s.CreatedAt.Format(time.RFC3339),
@@ -166,10 +174,12 @@ func (s *HardwareSnapshot) calculateSignature(key string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// calculateDeviation 计算硬件变化偏差
+// calculateDeviation 计算硬件变化偏差。
 //
-// 简化实现：比较指纹字符串的相似度
-// 实际应该基于组件权重进行精确计算
+// 实现说明：由于快照内 Components 仅保存指纹哈希（不可逆），无法逐组件比对，
+// 当前退化为"精确匹配"语义——currentFingerprint 命中任一组件返回 0，否则返回 1.0。
+// 因此 VerifySnapshot 的 allowedDeviation 参数实际上只在 >= 1.0 时放行任意变化，
+// < 1.0 时等价于要求完全一致。如需真正的加权偏差，需要在快照中保存各组件的明文特征。
 func calculateDeviation(components []string, weights []int, currentFingerprint string) float64 {
 	// 简化：如果指纹完全不同，返回 100% 偏差
 	// 实际应该解析组件并基于权重计算
@@ -180,10 +190,8 @@ func calculateDeviation(components []string, weights []int, currentFingerprint s
 	// 这里应该实现更精细的偏差计算逻辑
 	// 例如：解析指纹，对比各个组件，根据权重计算偏差
 	// 当前简化为：不匹配即返回最大偏差
-	for _, comp := range components {
-		if comp == currentFingerprint {
-			return 0.0
-		}
+	if slices.Contains(components, currentFingerprint) {
+		return 0.0
 	}
 
 	return 1.0
@@ -204,7 +212,11 @@ func (s *HardwareSnapshot) SaveToFile(filepath string) error {
 	return nil
 }
 
-// LoadSnapshotFromFile 从文件加载快照
+// LoadSnapshotFromFile 从文件加载快照。
+//
+// 注意：本函数只做 JSON 反序列化，不校验签名与完整性。从不可信来源加载后，
+// 必须显式调用 VerifySnapshot 校验签名和硬件一致性，否则快照内容（含过期时间等）
+// 可能被篡改。
 func LoadSnapshotFromFile(filepath string) (*HardwareSnapshot, error) {
 	data, err := os.ReadFile(filepath)
 	if err != nil {

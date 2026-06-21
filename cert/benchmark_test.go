@@ -1,5 +1,4 @@
 //go:build !go1.25
-// +build !go1.25
 
 // 注意：基准测试在 Go 1.25+ 的实验性 greenteagc GC 下存在 runtime SIGSEGV 问题
 // 在稳定版本的 Go 中运行基准测试

@@ -88,11 +88,11 @@ func TestValidationCacheConcurrentAccess(t *testing.T) {
 
 	cache := NewValidationCache(CacheConfig{TTL: time.Second, MaxSize: 50})
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			cert := []byte(fmt.Sprintf("cert-%d", i%10))
+			cert := fmt.Appendf(nil, "cert-%d", i%10)
 			machine := fmt.Sprintf("machine-%d", i%7)
 			cache.Put(cert, machine, nil)
 			if err, _ := cache.Get(cert, machine); err != nil {
@@ -117,8 +117,8 @@ func TestValidationCacheClear(t *testing.T) {
 	cache := NewValidationCache(CacheConfig{TTL: time.Minute, MaxSize: 10})
 
 	// 添加多个条目
-	for i := 0; i < 5; i++ {
-		cert := []byte(fmt.Sprintf("cert-%d", i))
+	for i := range 5 {
+		cert := fmt.Appendf(nil, "cert-%d", i)
 		machine := fmt.Sprintf("machine-%d", i)
 		cache.Put(cert, machine, nil)
 	}
@@ -298,7 +298,7 @@ func TestCachedAuthorizer_CacheHitRate(t *testing.T) {
 	}
 
 	// 多次验证 - 命中
-	for i := 0; i < 9; i++ {
+	for range 9 {
 		if err := cachedAuth.ValidateCert(cert.CertPEM, machineID); err != nil {
 			t.Fatalf("缓存命中时不应失败: %v", err)
 		}
@@ -436,8 +436,8 @@ func TestValidationCache_CleanupLoop(t *testing.T) {
 	})
 
 	// 添加一些会过期的条目
-	for i := 0; i < 5; i++ {
-		cert := []byte(fmt.Sprintf("cert-%d", i))
+	for i := range 5 {
+		cert := fmt.Appendf(nil, "cert-%d", i)
 		machine := fmt.Sprintf("machine-%d", i)
 		cache.Put(cert, machine, nil)
 	}

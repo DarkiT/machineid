@@ -14,27 +14,27 @@ const (
 // 只定义到调试寄存器字段，避免引入完整 CONTEXT 结构的兼容风险。
 // Windows x64 CONTEXT 中 Dr0-Dr7 位于前部固定位置。
 type contextDebugAmd64 struct {
-	P1Home      uint64
-	P2Home      uint64
-	P3Home      uint64
-	P4Home      uint64
-	P5Home      uint64
-	P6Home      uint64
+	P1Home       uint64
+	P2Home       uint64
+	P3Home       uint64
+	P4Home       uint64
+	P5Home       uint64
+	P6Home       uint64
 	ContextFlags uint32
-	MxCsr       uint32
-	SegCs       uint16
-	SegDs       uint16
-	SegEs       uint16
-	SegFs       uint16
-	SegGs       uint16
-	SegSs       uint16
-	EFlags      uint32
-	Dr0         uint64
-	Dr1         uint64
-	Dr2         uint64
-	Dr3         uint64
-	Dr6         uint64
-	Dr7         uint64
+	MxCsr        uint32
+	SegCs        uint16
+	SegDs        uint16
+	SegEs        uint16
+	SegFs        uint16
+	SegGs        uint16
+	SegSs        uint16
+	EFlags       uint32
+	Dr0          uint64
+	Dr1          uint64
+	Dr2          uint64
+	Dr3          uint64
+	Dr6          uint64
+	Dr7          uint64
 }
 
 func hasHardwareBreakpoints() bool {
