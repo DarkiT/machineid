@@ -39,6 +39,12 @@
   - `RegisterContainerHintProvider()` / `RegisterNamedContainerHintProvider()` / `UnregisterContainerHintProvider()` / `ResetContainerHintProviders()` 管理容器稳定特征提供者
   - 具名 provider 支持按名称替换，便于应用初始化、热更新与测试清理
 
+- **硬件信号 provider 扩展面** (`hardware_signal.go`, `id.go`, `hardware_*.go`)
+  - 新增 `HardwareSignal` / `HardwareSignalProvider` / `HardwareOptions` / `BindingOptions`
+  - 新增 `RegisterNamedHardwareSignalProvider()` / `UnregisterHardwareSignalProvider()` / `ResetHardwareSignalProviders()`
+  - 新增 `GetHardwareFingerprintStatusWithOptions()`、`ProtectedIDResultWithOptions()`、`ProtectedIDWithContainerAwareWithOptions()`
+  - 允许业务方按调用或进程级扩展主硬件指纹链，而不是只能在最终 fallback 阶段使用 `RegisterBindingProvider()`
+
 - **测试补充**
   - `cert/revoke_test.go`：吊销管理器完整测试（并发、自动更新、重试）
   - `cert/benchmark_test.go`：基准测试（缓存、批量操作、安全检查）
@@ -60,7 +66,6 @@
   - 分离成功和失败的缓存 TTL
   - 成功缓存：5 分钟（默认）
   - 错误缓存：10 秒（避免临时错误长期缓存）
-  - 新增 `SetCacheTTL()` 配置函数
 
 - **容器 ID 截取逻辑** (`container_id_parse.go`)
   - 改为从开头截取（保留容器 ID 有效部分）
@@ -83,6 +88,25 @@
   - 建议业务侧优先在 `ContainerBindingConfig` 中显式声明策略，而非依赖进程级全局模式，以降低迁移期兼容风险
 
 ### Fixed
+
+- **全量代码审查与生产加固**（本次 review，多文件）
+  - `cert/security.go`：修复 `backgroundSecurityCheck` 在持写锁时递归获取读锁导致的自死锁（新增 `verifyMemoryIntegrityLocked`），SecurityLevel≥2 长时间运行不再挂死、连带 `Check()`/`Close()` 不再被阻塞
+  - `cert/watcher.go`：`handleError` 重试等待改为响应 `ctx` 取消，`Stop()` 不再被重试循环卡死最长 15 分钟；`Stats()` 改用 `errors.As` 兼容被包装的错误
+  - `cert/cert.go`：证书序列号改用 `crypto/rand` 生成 128 位随机数，避免批量签发同纳秒撞号（RFC 5280 §4.1.2.2 唯一性要求）；清理 `SaveClientCert` 中的注释死代码
+  - `cert/cache.go`：`SignedValidationCache` 签名由裸 `sha256(key||data)` 改为标准 HMAC-SHA256，消除 length-extension 弱构造；新增 `CachedAuthorizer.Close()` 释放后台清理协程
+  - `cert/version.go`：版本号缓存增加 `maxVersionCacheSize` 上限，防止外部版本串撑爆内存；移除与 Go 内置冲突的自定义 `max`
+  - `cert/utils.go`：`PerformanceMonitor` 增加互斥锁，修复并发 `RecordOperation` 的 map 读写 panic
+  - `cert/authorization.go`：合并 `asn1Unmarshal` / `asn1UnmarshalReal` 双层包装死代码
+  - 根包 `helper.go`：为跨平台命脉函数 `commandOutput` 标注 `//nolint:unused`（darwin/aix/bsd 依赖它采集硬件信息，linux 下 lint 误报为未使用）
+  - 根包：删除从未被实现或引用的 `HardwareInfo` 死接口，消除对维护者的误导
+  - `golangci.yml`：修正 `goimports.local-prefixes` 模板残留（`vibedev/vibedevtools` → `github.com/darkit/machineid`）
+  - `CHANGELOG.md`：移除子虚乌有的 `SetCacheTTL()` 声明；`README.md` 修正 `ForProduction` 安全级别文档矛盾（统一为级别 2）
+  - `cert/authorizer.go`：为 `WithContainerSupport`/`WithOfflineValidation`/`WithMonotonicTime`/`WithSignedCache` 四个向后兼容 Option 补充“主参数当前不生效”的诚实文档
+
+- **快照安全约束文档化** (`cert/snapshot.go`)
+  - 明确 `CreateSnapshot`/`VerifySnapshot` 的签名密钥派生自本机 machineID、不绑定服务端私钥、不具备跨机强防伪造能力
+  - 明确 `calculateDeviation` 当前为精确匹配语义，`allowedDeviation<1.0` 等价于要求完全一致
+  - 明确 `LoadSnapshotFromFile` 不校验签名，加载后必须显式 `VerifySnapshot`
 
 - **VM 检测不再误判容器环境** (`cert/security.go`)
   - 分离容器检测与沙箱检测逻辑

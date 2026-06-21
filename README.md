@@ -1,42 +1,43 @@
 # machineid
 
-[![GoDoc](https://godoc.org/github.com/darkit/machineid?status.svg)](https://godoc.org/github.com/darkit/machineid) [![Go Report Card](https://goreportcard.com/badge/github.com/darkit/machineid)](https://goreportcard.com/report/github.com/darkit/machineid)
+[![Go Reference](https://pkg.go.dev/badge/github.com/darkit/machineid.svg)](https://pkg.go.dev/github.com/darkit/machineid)
+[![Go Report Card](https://goreportcard.com/badge/github.com/darkit/machineid)](https://goreportcard.com/report/github.com/darkit/machineid)
 
-高性能跨平台机器码生成库，支持多种操作系统和容器环境，提供安全的机器标识和授权管理功能。
+高性能跨平台机器码生成库，支持多种操作系统和容器环境，提供安全的机器标识与授权管理功能。
 
-![Image of Gopher 47](logo.png)
+![Gopher 47](logo.png)
 
-## ✨ 主要特性
+## 项目简介
 
-### 🚀 核心功能
-- **跨平台支持** - 支持 Windows、Linux、macOS、FreeBSD、AIX 等多种操作系统
-- **容器环境适配** - 自动检测和适配 Docker、Containerd 等容器运行时
-- **无管理员权限** - 所有功能均无需管理员或 root 权限
-- **简洁稳定** - 核心功能基于系统机器码，可选硬件绑定增强安全性
+machineid 是一个 Go 语言库，用于获取操作系统安装级别的稳定机器标识（Machine ID），提供 HMAC-SHA256 应用绑定保护、硬件指纹增强和多层级容器环境适配能力。在 Linux 平台上，`ID()` 会优先尝试宿主机可见的硬件机器码，仅当硬件特征不可用或不够稳定时才回退到传统 machine-id / 容器标识链路。
 
-### 🔒 安全特性
-- **HMAC-SHA256 加密** - 使用加密安全的哈希算法保护机器标识
-- **应用级绑定** - 支持应用特定的机器码生成
-- **MAC 地址绑定** - 可选的硬件绑定增强安全性
-- **证书授权管理** - 完整的 PKI 证书签发和验证系统
+本库同时提供 `cert` 子包的完整 PKI 证书授权管理功能，详见 [cert 包文档](cert/README.md)。
 
-### ⚡ 性能优化
-- **智能缓存** - 内存缓存机制减少重复计算
-- **并发安全** - 全面的并发保护和线程安全设计
-- **快速响应** - 优化的算法确保毫秒级响应
+### 核心能力
 
-## 📦 安装
+- 获取操作系统原生机器码（Windows / Linux / macOS / FreeBSD / AIX）
+- 跨平台容器环境检测（Docker / Containerd / Podman / Kubernetes）
+- 基于 HMAC-SHA256 的应用级机器码保护
+- 多级硬件指纹增强绑定（硬件指纹 > MAC 绑定 > 纯机器码自动降级）
+- 可扩展的自定义绑定提供者、硬件信号提供者和容器特征提供者
+- 容器感知的唯一性增强机器码（宿主机唯一 / 容器实例唯一）
+- 无管理员权限要求，纯 Go 实现无 CGO 依赖
+
+## 安装
 
 ```bash
 go get github.com/darkit/machineid
 ```
 
-命令行工具安装：
+安装命令行工具：
+
 ```bash
 go install github.com/darkit/machineid/cmd/machineid@latest
+go install github.com/darkit/machineid/cmd/hardware@latest
+go install github.com/darkit/machineid/cmd/authorize@latest
 ```
 
-## 🚀 快速开始
+## 快速开始
 
 ### 基础用法
 
@@ -56,84 +57,253 @@ func main() {
         log.Fatal(err)
     }
     fmt.Printf("机器码: %s\n", id)
-    
-    // 获取应用专属的受保护机器码（推荐）
+
+    // 获取应用专属的保护机器码（推荐）
     protectedID, err := machineid.ProtectedID("your.app.id")
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Printf("受保护机器码: %s\n", protectedID)
+    fmt.Printf("保护机器码: %s\n", protectedID)
 
     // 获取唯一性增强机器码（默认容器唯一）
     uniqueID, err := machineid.UniqueID("your.app.id")
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Printf("唯一性增强机器码: %s\n", uniqueID)
+    fmt.Printf("唯一机器码: %s\n", uniqueID)
 }
 ```
 
-### 高级功能
+### 系统信息摘要
 
 ```go
-package main
-
-import (
-    "fmt"
-    "log"
-    "github.com/darkit/machineid"
-)
-
-func main() {
-    // 获取系统信息摘要
-    info, err := machineid.GetInfo("your.app.id")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    fmt.Printf("机器码: %s\n", info.MachineID)
-    fmt.Printf("受保护机器码: %s\n", info.ProtectedID)
-    fmt.Printf("MAC地址: %s\n", info.MACAddress)
-    fmt.Printf("是否为容器: %t\n", info.IsContainer)
-    if info.ContainerID != "" {
-        fmt.Printf("容器ID: %s\n", info.ContainerID)
-    }
-}
-```
-
-### 智能硬件绑定
-
-```go
-// ProtectedID 现在自动使用最佳可用的硬件绑定方式
-// 优先级：硬件指纹 > MAC地址 > 纯机器码
-protectedID, err := machineid.ProtectedID("your.app.id")
+info, err := machineid.GetInfo("your.app.id")
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("智能保护机器码: %s\n", protectedID)
+
+fmt.Printf("机器码: %s\n", info.MachineID)
+fmt.Printf("保护机器码: %s\n", info.ProtectedID)
+fmt.Printf("MAC 地址: %s\n", info.MACAddress)
+fmt.Printf("是否容器: %t\n", info.IsContainer)
+if info.ContainerID != "" {
+    fmt.Printf("容器 ID: %s\n", info.ContainerID)
+}
+```
+
+### 智能硬件绑定与来源诊断
+
+```go
+// ProtectedID 自动选择最佳可用的硬件绑定方式
+// 优先级：硬件指纹 > MAC 地址 > 纯机器码
+bindingResult, err := machineid.ProtectedIDResult("your.app.id")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("保护机器码: %s\n", bindingResult.Hash)
+fmt.Printf("绑定模式: %s (提供者: %s)\n", bindingResult.Mode, bindingResult.Provider)
 
 // 宿主机唯一（容器内可切换）
 hostUnique, err := machineid.UniqueIDResult("your.app.id", &machineid.UniqueIDOptions{
     EnableContainer: true,
-    Mode: machineid.UniqueIDModeHost,
+    Mode:            machineid.UniqueIDModeHost,
 })
 if err != nil {
     log.Fatal(err)
 }
 fmt.Printf("宿主机唯一机器码: %s\n", hostUnique.Hash)
-fmt.Printf("宿主机唯一来源: %s (%s)\n", hostUnique.Provider, hostUnique.ContainerMode)
+fmt.Printf("来源: %s (容器模式: %s)\n", hostUnique.Provider, hostUnique.ContainerMode)
 
-// 直接获取MAC地址（可选）
-macAddr, err := machineid.GetMACAddress()
+// 当前 ID 来源诊断
+inspection, err := machineid.InspectID()
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("主网卡MAC: %s\n", macAddr)
+fmt.Printf("当前 ID: %s\n", inspection.ID)
+fmt.Printf("来源: %s\n", inspection.Source)
+fmt.Printf("是否容器: %t\n", inspection.IsContainer)
+fmt.Printf("回退链: %v\n", inspection.FallbackChain)
 ```
+
+## API 参考
+
+### 基础标识
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `ID()` | 获取原始机器码，Linux 优先宿主机硬件 | `(string, error)` |
+| `ProtectedID(appID)` | 获取智能硬件绑定的保护机器码（推荐） | `(string, error)` |
+| `ProtectedIDResult(appID)` | 获取保护机器码及完整绑定信息 | `(*BindingResult, error)` |
+| `ProtectedIDWithOptions(appID, opts)` | 使用显式 BindingOptions 生成保护机器码 | `(string, error)` |
+| `ProtectedIDResultWithOptions(appID, opts)` | 使用显式 BindingOptions 生成保护机器码及绑定信息 | `(*BindingResult, error)` |
+| `UniqueID(appID)` | 获取唯一性增强机器码 | `(string, error)` |
+| `UniqueIDResult(appID, opts)` | 使用 UniqueIDOptions 获取唯一性增强机器码及绑定信息 | `(*BindingResult, error)` |
+
+### 兼容性 API
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `ProtectedIDWithMAC(appID)` | 使用 MAC 地址绑定的保护机器码 | `(string, error)` |
+| `ProtectedIDWithMACResult(appID)` | 使用 MAC 地址绑定的保护机器码及绑定信息 | `(*BindingResult, error)` |
+| `ProtectedIDWithHardware(appID)` | 使用硬件指纹绑定的保护机器码 | `(string, error)` |
+
+### 容器感知 API
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `IsContainer()` | 检查是否运行在容器环境 | `bool` |
+| `ProtectedIDWithContainerAware(appID, config)` | 容器感知的保护机器码生成 | `(*BindingResult, error)` |
+| `ProtectedIDWithContainerAwareWithOptions(appID, config, opts)` | 容器感知保护机器码 + 显式硬件 provider | `(*BindingResult, error)` |
+
+### 系统信息
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `GetInfo(appID)` | 获取完整系统信息摘要（推荐） | `(*Info, error)` |
+| `GetMACAddress()` | 获取主网卡 MAC 地址 | `(string, error)` |
+| `GetHardwareFingerprint()` | 获取硬件指纹 | `(string, error)` |
+| `GetHardwareFingerprintStatus()` | 获取硬件指纹状态（含信号详情） | `(*FingerprintStatus, error)` |
+| `GetHardwareFingerprintStatusWithOptions(opts)` | 使用显式 hardware provider 生成指纹状态 | `(*FingerprintStatus, error)` |
+| `GetHardwareFingerprintWithOptions(opts)` | 使用显式 hardware provider 生成指纹 | `(string, error)` |
+| `InspectID()` | 诊断当前 ID 的来源链路 | `(*IDInspection, error)` |
+
+### Provider / Hint 生命周期管理
+
+以下 API 管理进程级全局注册表，适用于测试隔离、插件宿主和短生命周期扩展场景。
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `RegisterBindingProvider(name, provider)` | 注册自定义绑定提供者（名称唯一） | — |
+| `UnregisterBindingProvider(name)` | 移除指定名称的自定义绑定提供者 | `bool` |
+| `ResetBindingProviders()` | 清空全部自定义绑定提供者并恢复默认 | — |
+| `RegisterNamedHardwareSignalProvider(name, provider)` | 注册具名硬件信号 provider | — |
+| `UnregisterHardwareSignalProvider(name)` | 移除指定名称的硬件信号 provider | `bool` |
+| `ResetHardwareSignalProviders()` | 清空全部进程级硬件信号 provider | — |
+| `RegisterContainerHintProvider(provider)` | 注册自定义容器特征提供者（匿名） | — |
+| `RegisterNamedContainerHintProvider(name, provider)` | 注册具名容器特征提供者（名称唯一） | — |
+| `UnregisterContainerHintProvider(name)` | 移除指定名称的具名容器特征提供者 | `bool` |
+| `ResetContainerHintProviders()` | 清空全部容器特征提供者（匿名 + 具名） | — |
+| `ClearCache()` | 清除 ID 和 MAC 地址缓存 | — |
+| `ClearHardwareCache()` | 清除硬件指纹缓存 | — |
+
+### 容器 Hint 合成策略
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `GetContainerHintCombineMode()` | 获取容器 scoped ID 的 hint 合成策略 | `ContainerHintCombineMode` |
+| `SetContainerHintCombineMode(mode)` | 设置容器 scoped ID 的 hint 合成策略，自动清理 ID 缓存 | `error` |
+
+### 核心类型
+
+#### BindingResult
+
+描述保护 ID 最终采用的绑定模式与降级原因。
+
+```go
+type BindingResult struct {
+    Hash             string      // 生成的机器码哈希
+    Mode             BindingMode // 绑定模式：fingerprint / mac / machine_id / custom
+    Provider         string      // 提供者名称
+    FingerprintError error       // 硬件指纹获取失败的错误
+    MACError         error       // MAC 地址获取失败的错误
+    ContainerMode    string      // 容器绑定策略：host / container / hybrid / none
+    ContainerID      string      // 容器 ID（如果检测到）
+}
+```
+
+#### Info
+
+完整的系统信息摘要。
+
+```go
+type Info struct {
+    MachineID   string `json:"machine_id"`
+    ProtectedID string `json:"protected_id"`
+    MACAddress  string `json:"mac_address,omitempty"`
+    IsContainer bool   `json:"is_container"`
+    ContainerID string `json:"container_id,omitempty"`
+}
+```
+
+#### IDInspection
+
+当前 ID 的来源诊断信息。
+
+```go
+type IDInspection struct {
+    ID                       string     `json:"id"`
+    Source                   IDSource   `json:"source"`
+    IsContainer              bool       `json:"is_container"`
+    ContainerID              string     `json:"container_id,omitempty"`
+    HostHardwareAvailable    bool       `json:"host_hardware_available,omitempty"`
+    ContainerScopedAvailable bool       `json:"container_scoped_available,omitempty"`
+    FallbackChain            []IDSource `json:"fallback_chain,omitempty"`
+}
+```
+
+#### FingerprintStatus
+
+硬件指纹的值与稳定性信息。
+
+```go
+type FingerprintStatus struct {
+    Value       string            // 指纹值
+    Stable      bool              // 是否稳定
+    Signals     []HardwareSignal  // 参与计算的信号列表
+    Sources     []string          // 信号来源
+    TotalWeight int               // 总权重
+}
+```
+
+#### HardwareSignal
+
+参与硬件指纹计算的单条信号。
+
+```go
+type HardwareSignal struct {
+    Name   string        // 信号名称
+    Value  string        // 信号值
+    Weight int           // 权重
+    Strong bool          // 是否强宿主级特征
+    Scope  HardwareScope // 语义范围：firmware / storage / cpu / network / runtime
+    Source string        // 来源标识
+}
+```
+
+#### ContainerBindingConfig
+
+容器绑定的策略配置。
+
+```go
+type ContainerBindingConfig struct {
+    Mode                ContainerBindingMode       // 绑定模式：auto / host / container
+    PreferHostHardware  bool                       // 优先使用宿主机硬件
+    FallbackToContainer bool                       // 宿主机硬件不可用时允许降级
+    PersistentVolume    string                     // 持久卷路径（用于容器级标识持久化）
+    HintCombineMode     *ContainerHintCombineMode  // 容器特征合成策略
+}
+```
+
+#### UniqueIDOptions
+
+唯一性增强机器码的生成选项。
+
+```go
+type UniqueIDOptions struct {
+    EnableContainer       bool                     // 启用容器感知逻辑
+    ContainerConfig       *ContainerBindingConfig  // 容器绑定配置
+    Mode                  UniqueIDMode             // 唯一性策略：容器唯一 / 宿主机唯一
+    EnableCustomProviders bool                     // 是否启用自定义绑定提供者
+    ForceMACBinding       bool                     // 是否强制 MAC 绑定
+    Hardware              *HardwareOptions          // 硬件信号来源控制
+}
+```
+
+## 自定义扩展
 
 ### 自定义绑定提供者
 
-如果需要扩展绑定来源（例如磁盘序列号、云厂商元数据），可以注册自定义提供者：
+当内置硬件指纹和 MAC 绑定不可用时，`ProtectedID` 会尝试自定义提供者。
 
 ```go
 machineid.RegisterBindingProvider("disk", func(appID, machineID string) (string, bool, error) {
@@ -145,39 +315,61 @@ machineid.RegisterBindingProvider("disk", func(appID, machineID string) (string,
 })
 ```
 
-当内置硬件指纹和 MAC 绑定不可用时，`ProtectedID` 会尝试自定义提供者，并在 `BindingResult` 中返回 `Mode="custom"`、`Provider="disk"` 等信息。
+返回结果中 `Mode` 为 `custom`，`Provider` 为 `"disk"`。
 
-自定义绑定提供者注册表是**进程级全局状态**。如果在测试、插件热加载或临时覆盖场景中需要管理生命周期，可以使用 `UnregisterBindingProvider(name string) bool` 移除单个提供者，或使用 `ResetBindingProviders()` 清空全部自定义提供者并恢复默认状态。
+### 自定义硬件信号提供者
 
-### 容器环境检测
+如果需要在主硬件指纹链中注入额外的信号（而非仅作为 fallback），可注册 `HardwareSignalProvider`：
 
 ```go
-// 检查是否运行在容器中
-if machineid.IsContainer() {
-    fmt.Println("运行在容器环境中")
-} else {
-    fmt.Println("运行在物理机或虚拟机中")
-}
+provider := machineid.HardwareSignalProviderFunc(func(ctx context.Context) ([]machineid.HardwareSignal, error) {
+    return []machineid.HardwareSignal{
+        {
+            Name:   "asset_tag",
+            Value:  "rack-a/host-42",
+            Weight: 220,
+            Strong: true,
+            Scope:  machineid.HardwareScopeFirmware,
+            Source: "inventory-agent",
+        },
+    }, nil
+})
+
+machineid.RegisterNamedHardwareSignalProvider("inventory", provider)
+defer machineid.UnregisterHardwareSignalProvider("inventory")
+
+result, err := machineid.ProtectedIDResultWithOptions("your.app.id", &machineid.BindingOptions{
+    Hardware: &machineid.HardwareOptions{
+        Provider: provider,
+        Mode:     machineid.HardwareProviderAppend, // 追加到内建信号之后
+    },
+})
 ```
 
-### Kubernetes / 云原生提示
+推荐实践：
 
-容器指纹会在检测到 Kubernetes 环境变量时自动纳入 Pod/Node 相关提示（无需访问集群 API）。
-可用变量包括：`POD_UID`、`POD_NAME`、`POD_NAMESPACE`、`NODE_NAME` 等。
+- 扩展最终绑定 fallback：使用 `RegisterBindingProvider()`
+- 扩展主硬件指纹链：使用 `HardwareSignalProvider`
+- 业务调用优先走 per-call 的 `HardwareOptions`
+- 进程级 `RegisterNamedHardwareSignalProvider()` 适合测试、插件宿主或企业 agent 集成
 
-如需补充自定义容器 hint，可通过 `RegisterNamedContainerHintProvider(name string, provider ContainerHintProvider)` 注册具名提供者。该注册表同样为**进程级全局状态**，可使用 `UnregisterContainerHintProvider(name string) bool` 移除单个提供者，或使用 `ResetContainerHintProviders()` 清空全部自定义 hint provider，适合测试隔离和短生命周期扩展场景。
+### 容器特征扩展
 
-容器 scoped ID 的 hint 合成策略默认保持历史行为：`ContainerHintCombineFirst`（只消费第一条非空 hint）。底层 `ID()` 在 Linux 上会先尝试宿主可见硬件机器码；只有拿不到足够稳定的硬件特征时，才会在容器内继续走 container-scoped / container ID fallback，在宿主机上则回退到原先的 machine-id。若需要调整这条 fallback 链里“container scoped ID”的进程级 hint 合成行为，可调用 `SetContainerHintCombineMode(ContainerHintCombineAll)` 显式切换；该设置会自动清理 `ID()` 缓存，避免新旧策略混用。
-
-对 `ProtectedIDWithContainerAware` / `UniqueIDResult` 这类显式容器感知 API，最佳实践是通过 `ContainerBindingConfig.HintCombineMode` 按调用控制特征合成策略，而不是依赖进程级全局开关。默认 `DefaultContainerBindingConfig()` 会保持当前语义：组合全部稳定容器特征。
-
-小心这里的边界：`ID()` 是底层 raw identity，在 Linux 上现在会优先选择**宿主可见硬件机器码**，不论当前进程是在容器里还是宿主机上；只有硬件特征不可见或不够稳定时，才回退到原先的 machine-id / container fallback。  
-而 `UniqueIDModeHost` / `UniqueIDModeContainer` 是更高层的业务语义开关：前者表达“尽量绑定宿主/VM”，后者表达“尽量绑定容器实例”。如果你显式传 `UniqueIDOptions`，记得同时把 `EnableContainer: true` 打开，否则 `Mode` 不会触发容器感知分支。
-
-### 容器绑定最佳实践
+Kubernetes 环境下，容器指纹会自动纳入 Pod/Node 相关环境变量（`POD_UID`、`POD_NAME`、`POD_NAMESPACE`、`NODE_NAME`、`KUBERNETES_POD_UID`、`K8S_POD_UID` 等）。如需补充自定义 hint：
 
 ```go
-// 推荐：显式容器感知 API 通过 ContainerBindingConfig.HintCombineMode 按调用控制语义
+machineid.RegisterNamedContainerHintProvider("my-hint", func() []string {
+    return []string{"cluster-x", "region-us-east"}
+})
+```
+
+## 容器环境适配指南
+
+### 上层 API 优先使用 Config 控制（推荐）
+
+业务逻辑应通过 `ContainerBindingConfig.HintCombineMode` 按调用控制语义，而不是依赖进程级全局开关：
+
+```go
 combineMode := machineid.ContainerHintCombineAll
 cfg := &machineid.ContainerBindingConfig{
     Mode:                machineid.ContainerBindingContainer,
@@ -192,283 +384,53 @@ result, err := machineid.UniqueIDResult("your.app.id", &machineid.UniqueIDOption
     ContainerConfig: cfg,
     Mode:            machineid.UniqueIDModeContainer,
 })
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("容器唯一机器码: %s (%s)\n", result.Hash, result.Provider)
 ```
 
-```go
-// 推荐：对 ProtectedIDWithContainerAware 也使用显式 config，而不是依赖全局开关
-combineMode := machineid.ContainerHintCombineFirst // 兼容旧 scoped ID 语义
-cfg := machineid.DefaultContainerBindingConfig()
-cfg.Mode = machineid.ContainerBindingContainer
-cfg.PreferHostHardware = false
-cfg.HintCombineMode = &combineMode
-
-binding, err := machineid.ProtectedIDWithContainerAware("your.app.id", cfg)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("容器保护机器码: %s (%s)\n", binding.Hash, binding.Provider)
-```
+### 仅在兼容旧代码时使用全局开关
 
 ```go
-// 仅在需要调整底层 ID() 容器 fallback 时，才使用进程级全局开关
+// 仅在需要调整底层 ID() 容器 fallback 行为时使用
 if err := machineid.SetContainerHintCombineMode(machineid.ContainerHintCombineAll); err != nil {
     log.Fatal(err)
 }
 id, err := machineid.ID()
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("底层机器码: %s\n", id)
 ```
 
-推荐心法：业务逻辑优先走 `ContainerBindingConfig.HintCombineMode`；只有在兼容旧代码、且确实依赖底层 `ID()` 容器 fallback 时，才触碰 `SetContainerHintCombineMode(...)` 这种进程级全局态。
+### 重要语义边界
 
-### 当前 ID 来源诊断
+- `ID()` 是底层 raw identity，在 Linux 上优先选择宿主可见硬件机器码，不论当前进程是在容器里还是宿主机上；只有硬件特征不可见或不够稳定时才回退到 machine-id / container fallback。
+- `UniqueIDModeHost` / `UniqueIDModeContainer` 是更高层的业务语义开关：前者表示尽量绑定宿主/VM，后者表示尽量绑定容器实例。显式传入 `UniqueIDOptions` 时需要同时设置 `EnableContainer: true`。
 
-```go
-inspection, err := machineid.InspectID()
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Printf("当前 ID: %s\n", inspection.ID)
-fmt.Printf("来源: %s\n", inspection.Source)
-fmt.Printf("是否容器: %t\n", inspection.IsContainer)
-fmt.Printf("回退链: %v\n", inspection.FallbackChain)
-```
-
-## 🔧 API 参考
-
-### 核心函数
-
-| 函数 | 描述 | 返回值 |
-|------|------|--------|
-| `ID()` | 获取原始机器码 | `(string, error)` |
-| `ProtectedID(appID)` | **获取智能硬件绑定的保护机器码（推荐）** | `(string, error)` |
-| `GetInfo(appID)` | **获取完整系统信息（推荐）** | `(*Info, error)` |
-| `GetMACAddress()` | 获取主网卡MAC地址 | `(string, error)` |
-| `InspectID()` | 诊断当前 `ID()` 走到的来源链路 | `(*IDInspection, error)` |
-| `IsContainer()` | 检查是否在容器环境 | `bool` |
-| `ClearCache()` | 清除所有缓存 | `void` |
-
-### Provider / Hint 生命周期
-
-| 函数 | 描述 | 返回值 |
-|------|------|--------|
-| `UnregisterBindingProvider(name)` | 移除指定的自定义绑定提供者 | `bool` |
-| `ResetBindingProviders()` | 清空全部自定义绑定提供者并恢复默认状态 | `void` |
-| `RegisterNamedContainerHintProvider(name, provider)` | 注册具名容器 hint provider | `void` |
-| `UnregisterContainerHintProvider(name)` | 移除指定的容器 hint provider | `bool` |
-| `ResetContainerHintProviders()` | 清空全部自定义容器 hint provider | `void` |
-| `GetContainerHintCombineMode()` | 获取当前容器 scoped ID 的 hint 合成策略 | `ContainerHintCombineMode` |
-| `SetContainerHintCombineMode(mode)` | 设置容器 scoped ID 的 hint 合成策略，并自动清理 ID 缓存 | `error` |
-
-### Info 结构体
-
-```go
-type Info struct {
-    MachineID   string `json:"machine_id"`            // 原始机器码
-    ProtectedID string `json:"protected_id"`          // 智能保护机器码
-    MACAddress  string `json:"mac_address,omitempty"` // MAC地址
-    IsContainer bool   `json:"is_container"`          // 是否容器环境
-    ContainerID string `json:"container_id,omitempty"` // 容器ID
-}
-```
-
-## 🏗️ 证书授权管理
-
-本库还提供了完整的 PKI 证书管理功能，用于软件授权和客户信息管理。
-
-> 📚 **详细文档**：完整的证书管理功能请参阅 [cert包文档](./cert/README.md)
-
-### 主要功能
-- ✅ **CA证书生成** - 自定义根证书和私钥管理
-- ✅ **客户端证书签发** - 基于机器码的证书签发
-- ✅ **证书验证** - 完整的证书链验证和有效性检查
-- ✅ **客户信息提取** - 从证书中提取完整客户资料
-- ✅ **智能监控** - 自动监控证书状态和到期预警
-- ✅ **安全防护** - 4级安全防护(反调试、虚拟机检测等)
-- ✅ **批量处理** - 大规模证书操作支持
-
-### 基础授权管理
-
-```go
-package main
-
-import (
-    "time"
-    "github.com/darkit/machineid"
-    "github.com/darkit/machineid/cert"
-)
-
-func main() {
-    // 创建授权管理器（默认开发友好，无安全检查）
-    auth, err := cert.NewAuthorizer().
-        WithRuntimeVersion("2.5.0"). // 设置当前运行的软件版本
-        Build()
-    if err != nil {
-        panic(err)
-    }
-
-    // 获取机器码（使用标准ProtectedIDResult 以保留绑定来源）
-    bindingResult, _ := machineid.ProtectedIDResult("your.app.id")
-    machineID := bindingResult.Hash
-
-    // 构建证书请求
-    request, err := cert.NewClientRequest().
-        WithMachineID(machineID).
-        WithBindingResult(bindingResult).
-        WithExpiry(time.Now().AddDate(1, 0, 0)).
-        WithCompany("示例科技公司", "研发部").
-        WithContact("张经理", "13800138000", "zhang@example.com").
-        WithMinClientVersion("2.0.0").
-        WithValidityDays(365).
-        Build()
-
-    // 签发证书
-    certificate, err := auth.IssueClientCert(request)
-    if err != nil {
-        panic(err)
-    }
-
-    // 验证证书
-    err = auth.ValidateCert(certificate.CertPEM, machineID)
-    if err != nil {
-        panic(err)
-    }
-
-    // 提取客户信息
-    clientInfo, err := auth.ExtractClientInfo(certificate.CertPEM)
-    if err == nil {
-        fmt.Printf("授权给: %s (%s)\n", clientInfo.CompanyName, clientInfo.ContactPerson)
-        fmt.Printf("联系方式: %s\n", clientInfo.ContactEmail)
-        fmt.Printf("绑定模式: %s\n", clientInfo.BindingMode)
-        fmt.Printf("绑定提供者: %s\n", clientInfo.BindingProvider)
-        fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02"))
-    }
-
-    // 启动智能监控（可选）
-    watchCallback := func(event cert.WatchEvent, info *cert.ClientInfo, err error) {
-        switch event {
-        case cert.WatchEventExpiring:
-            fmt.Printf("警告: 证书即将到期 - %s\n", info.CompanyName)
-        case cert.WatchEventExpired:
-            fmt.Printf("紧急: 证书已过期 - %s\n", info.CompanyName)
-        }
-    }
-    
-    // 启动监控（1小时检查间隔，7天预警期）
-    watcher, _ := auth.Watch(certificate.CertPEM, machineID, watchCallback)
-    defer watcher.Stop()
-}
-```
-
-> 💡 **版本提示**：`WithRuntimeVersion` 表示当前正在运行的软件实际版本，用于校验证书要求；`WithMinClientVersion` 表示签发证书时要求客户端至少达到的版本，两者互不冲突。
-
-### 环境配置和安全等级
-
-```go
-// 开发环境（无安全检查，推荐）
-devAuth, _ := cert.ForDevelopment().Build()
-
-// 生产环境（基础安全检查）
-prodAuth, _ := cert.ForProduction().Build()
-
-// 高安全环境（完整反调试保护）
-secureAuth, _ := cert.NewAuthorizer().WithSecureDefaults().Build()
-
-// 关键系统（最高安全级别）
-criticalAuth, _ := cert.NewAuthorizer().WithCriticalSecurity().Build()
-```
-
-### 证书管理新增功能
-
-#### 客户信息提取
-
-```go
-// 从任何证书中提取完整的客户信息
-clientInfo, err := auth.ExtractClientInfo(certPEM)
-if err != nil {
-    // 处理错误
-}
-
-fmt.Printf("公司: %s\n", clientInfo.CompanyName)
-fmt.Printf("联系人: %s (%s)\n", clientInfo.ContactPerson, clientInfo.ContactEmail)
-fmt.Printf("到期时间: %s\n", clientInfo.ExpiryDate.Format("2006-01-02"))
-```
-
-#### 智能监控回调
-
-```go
-// 定义监控回调处理不同事件
-watchCallback := func(event cert.WatchEvent, clientInfo *cert.ClientInfo, err error) {
-    switch event {
-    case cert.WatchEventExpiring:
-        // 证书即将到期（默认7天预警）
-        sendRenewalNotification(clientInfo)
-    case cert.WatchEventExpired:
-        // 证书已过期
-        disableService(clientInfo)
-    case cert.WatchEventRevoked:
-        // 证书被吊销
-        handleSecurityIncident(clientInfo)
-    }
-}
-
-// 启动监控（支持自定义间隔）
-watcher, err := auth.Watch(certPEM, machineID, watchCallback,
-    time.Hour,        // 检查间隔（可选，默认1小时）
-    3*24*time.Hour)   // 预警期（可选，默认7天）
-
-// 监控管理器（管理多个证书）
-manager := cert.NewWatcherManager()
-manager.AddWatcher("license1", watcher1)
-manager.AddWatcher("license2", watcher2)
-```
-
-## 🔍 工作原理
+## 工作原理
 
 ### 机器码来源
 
 | 操作系统 | 主要来源 | 备用来源 |
 |----------|----------|----------|
-| **Windows** | 注册表 `MachineGuid` | - |
-| **Linux** | `/var/lib/dbus/machine-id` | `/etc/machine-id`, `$HOME/.config/machine-id` |
-| **macOS** | `IOPlatformUUID` | - |
-| **FreeBSD** | `/etc/hostid` | `smbios.system.uuid` |
-| **AIX** | `uname -u` | - |
+| Windows | 注册表 `MachineGuid` | — |
+| Linux | `/var/lib/dbus/machine-id` | `/etc/machine-id`、`$HOME/.config/machine-id` |
+| macOS | `IOPlatformUUID` | — |
+| FreeBSD | `/etc/hostid` | `smbios.system.uuid` |
+| AIX | `uname -u` | — |
 
-### 容器环境处理
+### 容器环境检测
 
-**Linux 容器检测**：
+**Linux**：
 - 检查 `/proc/self/cgroup` 和 `/proc/self/mountinfo`
 - 支持 Docker、Containerd、Podman 等容器运行时
-- 环境变量检测：`CONTAINER_ID`、`DOCKER_CONTAINER_ID`
+- 环境变量：`CONTAINER_ID`、`DOCKER_CONTAINER_ID`
 
-**其他系统**：
+**其他平台**：
 - 检查 `/.dockerenv` 文件
 - 环境变量检测
 
-### 安全考虑
+### 安全设计
 
-1. **原始机器码保护**
-   - 原始机器码应视为机密信息
-   - 生产环境建议使用 `ProtectedID()` 而非 `ID()`
+1. 原始机器码应视为机密信息，生产环境建议使用 `ProtectedID()` 而非 `ID()`
+2. HMAC-SHA256 用于应用绑定，返回 64 位十六进制字符串
+3. `ProtectedID()` 自动选择最佳可用的硬件绑定方式，优先级：硬件指纹 > MAC 地址 > 纯机器码
 
-2. **加密算法**
-   - 使用 HMAC-SHA256 进行应用绑定
-   - 返回64位十六进制字符串
-
-3. **智能硬件绑定**
-   - `ProtectedID()` 自动选择最佳可用的硬件绑定方式
-   - 优先级：硬件指纹 > MAC地址 > 纯机器码
-   - 在不同环境下提供最佳的稳定性和安全性平衡
-
-## 📱 命令行工具
+## 命令行工具
 
 ```bash
 # 获取原始机器码
@@ -477,77 +439,112 @@ machineid
 # 获取应用专属机器码
 machineid --appid MyApp
 
+# 获取硬件指纹与系统诊断
+hardware
+
+# 证书授权管理演示
+authorize
+
 # 输出示例
 # 原始: 8245d07ef271816592fbd6172e521a945bdc4e3dca2fd91ef57cddf5a298b73f
 # 应用专属: DCEF03E8DB3B602695BAFE227E6CC73180807D3A0FDAB459EC0A8FA2DCA1E99E
 ```
 
-## 🧪 测试
+## 构建与测试
+
+### 构建
+
+```bash
+# 构建当前架构
+make build
+
+# 构建所有平台
+make build-all
+
+# 构建常用平台 (Linux, Windows, macOS)
+make build-common
+
+# 查看构建信息
+make info
+```
+
+支持的目标平台：`linux/amd64`、`linux/arm64`、`linux/arm`、`windows/amd64`、`windows/arm64`、`darwin/amd64`、`darwin/arm64`、`freebsd/amd64`。
+
+### 测试
 
 ```bash
 # 运行所有测试
-go test -v
+make test
 
-# 运行基准测试
-go test -bench=.
+# 运行竞态检测测试
+make test-race
 
-# 测试覆盖率
-go test -cover
+# 基准测试
+make benchmark
+
+# 查看测试覆盖率
+make cover
+
+# 跨平台编译兼容性检测
+make check-cross-builds
 ```
 
-## 🔄 迁移指南
+### 代码质量
+
+```bash
+# 代码格式化
+make fmt
+
+# 静态检查
+make lint
+
+# 安全检查
+make vet
+```
+
+## 迁移指南
 
 ### 从原版 denisbrodbeck/machineid 迁移
 
-本版本与原版 API 完全兼容，主要改进包括：
+本版本与原版 API 完全兼容，主要改进：
 
-1. **ProtectedID 智能优化**：自动选择最佳硬件绑定方式，提供更好的稳定性
-2. **新增功能**：容器检测、系统信息、缓存机制
-3. **性能优化**：并发安全、智能缓存
-4. **扩展模块**：证书授权管理
+1. `ProtectedID` 智能优化：自动选择最佳硬件绑定方式
+2. 新增容器检测、系统信息、缓存机制
+3. 性能优化：并发安全、智能缓存（成功 5min / 失败 10s TTL）
+4. 扩展模块：证书授权管理（`cert` 子包）
+5. 可扩展的 provider / hint 体系
 
-### 版本兼容性
+### 兼容性
 
 ```go
 // 原版用法（仍然支持）
 id, _ := machineid.ID()
 protectedID, _ := machineid.ProtectedID("app")
 
-// 新版建议用法
+// 推荐用法
 info, _ := machineid.GetInfo("app")
 // 使用 info.MachineID 和 info.ProtectedID
 ```
 
-## 🤝 贡献指南
-
-1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-## 📋 已知限制
+## 已知限制
 
 1. **虚拟机克隆**：克隆的虚拟机可能具有相同的机器码
-2. **系统重装**：重装操作系统通常会更改机器码
+2. **系统重装**：重装操作系统通常会改变机器码
 3. **容器环境**：优先使用宿主可见硬件机器码；若硬件特征不可见或不够稳定，则回退到 container-scoped / container ID，重新创建容器时可能变化
-4. **Linux 用户目录**：用户级机器码文件 `$HOME/.config/machine-id` 在某些环境下可能不可用
+4. **镜像环境**：基于相同模板创建的镜像可能共享相同的 machine-id
 
-## 🔗 相关链接
+## 相关链接
 
+- [Go Package Reference](https://pkg.go.dev/github.com/darkit/machineid)
 - [原始项目](https://github.com/denisbrodbeck/machineid)
-- [机器码标准说明](http://man7.org/linux/man-pages/man5/machine-id.5.html)
+- [machine-id(5) 手册](http://man7.org/linux/man-pages/man5/machine-id.5.html)
 - [Windows MachineGuid 文档](https://docs.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystemproduct)
 
-## 📄 许可证
+## 许可证
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
+MIT License - 详见 [LICENSE](LICENSE)
 
-## 🙏 致谢
+## 致谢
 
 - 原始项目作者 [Denis Brodbeck](https://github.com/denisbrodbeck)
-- Go Gopher 图标由 [Renee French](http://reneefrench.blogspot.com/) 设计
-
----
-
-**⭐ 如果这个项目对你有帮助，请给我们一个 Star！**
+- Go Gopher 图标由 [Renee French](http://reneefrench.blogspot.com/) 设计，遵循 [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/) 许可
