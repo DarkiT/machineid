@@ -1,10 +1,9 @@
 //go:build darwin
-// +build darwin
 
 package machineid
 
 import (
-	"crypto/sha256"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,47 +202,16 @@ func GetHardwareFingerprint() (string, error) {
 
 // GetHardwareFingerprintStatus 返回指纹与稳定性
 func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	return defaultFingerprintStatusProvider()
+}
+
+func builtinHardwareSignals(_ context.Context) ([]HardwareSignal, error) {
 	info, err := GetHardwareInfo()
 	if err != nil {
-		// 采集失败时仍允许基于已有字段尝试生成指纹；只有完全没有可用字段时才返回错误。
+		// 采集失败时允许调用方收到 err；默认行为与旧版一致，由上层决定是否 fallback。
+		return nil, err
 	}
-
-	weights := collectHardwareWeights(info)
-	if len(weights) == 0 {
-		if err != nil {
-			return nil, fmt.Errorf("no hardware identifiers available: %w", err)
-		}
-		return nil, fmt.Errorf("no hardware identifiers available")
-	}
-
-	sort.Slice(weights, func(i, j int) bool {
-		return weights[i].Weight > weights[j].Weight
-	})
-
-	var components []string
-	totalWeight := 0
-	for _, w := range weights {
-		if w.Value == "" {
-			continue
-		}
-		components = append(components, fmt.Sprintf("%s:%s", w.Name, w.Value))
-		totalWeight += w.Weight
-		if totalWeight >= 200 {
-			break
-		}
-	}
-
-	if len(components) == 0 {
-		if err != nil {
-			return nil, fmt.Errorf("no valid hardware identifiers found: %w", err)
-		}
-		return nil, fmt.Errorf("no valid hardware identifiers found")
-	}
-
-	combined := strings.Join(components, "|")
-	hash := sha256.Sum256([]byte(combined))
-	stable := totalWeight >= 150
-	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: stable}, nil
+	return hardwareSignalsFromWeights(collectHardwareWeights(info), "builtin/darwin"), nil
 }
 
 // ProtectedIDWithHardware macOS版本

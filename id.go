@@ -46,6 +46,7 @@ var (
 	macCacheFailureTTL = 10 * time.Second
 
 	fingerprintStatusProvider = GetHardwareFingerprintStatus
+	hardwareSignalProvider    = HardwareSignalProviderFunc(builtinHardwareSignals)
 	macResolver               = resolveMACAddr
 	machineIDProvider         = machineID
 	idProvider                = ID
@@ -76,8 +77,11 @@ type BindingResult struct {
 
 // FingerprintStatus 描述硬件指纹的值与稳定性
 type FingerprintStatus struct {
-	Value  string
-	Stable bool
+	Value       string
+	Stable      bool
+	Signals     []HardwareSignal
+	Sources     []string
+	TotalWeight int
 }
 
 // MACInfo 描述筛选到的 MAC 地址与其稳定性
@@ -109,6 +113,8 @@ type UniqueIDOptions struct {
 	EnableCustomProviders bool
 	// ForceMACBinding 是否强制使用 MAC 绑定（会绕过其他策略）。
 	ForceMACBinding bool
+	// Hardware 控制本次调用使用的硬件信号来源。
+	Hardware *HardwareOptions
 }
 
 // DefaultUniqueIDOptions 返回默认选项（容器感知 + 自定义提供者）。
@@ -119,6 +125,7 @@ func DefaultUniqueIDOptions() *UniqueIDOptions {
 		Mode:                  UniqueIDModeContainer,
 		EnableCustomProviders: true,
 		ForceMACBinding:       false,
+		Hardware:              nil,
 	}
 }
 
@@ -196,8 +203,22 @@ func ProtectedID(appID string) (string, error) {
 
 // ProtectedIDResult 返回包含详细绑定信息的结果
 func ProtectedIDResult(appID string) (*BindingResult, error) {
+	return ProtectedIDResultWithOptions(appID, nil)
+}
+
+// ProtectedIDWithOptions 使用可选 binding options 生成保护机器码。
+func ProtectedIDWithOptions(appID string, options *BindingOptions) (string, error) {
+	result, err := ProtectedIDResultWithOptions(appID, options)
+	if err != nil {
+		return "", err
+	}
+	return result.Hash, nil
+}
+
+// ProtectedIDResultWithOptions 返回包含详细绑定信息的结果，并允许按调用注入硬件信号 provider。
+func ProtectedIDResultWithOptions(appID string, options *BindingOptions) (*BindingResult, error) {
 	// 默认不启用容器特征派生逻辑，保持历史优先级：fingerprint -> MAC -> machine-id
-	return protectedIDWithPriority(appID, false)
+	return protectedIDWithPriority(appID, false, extractHardwareOptions(options))
 }
 
 // UniqueID 返回“唯一性增强”的保护机器码（兼容 ID() 行为，不影响已有接口）。
@@ -214,7 +235,7 @@ func UniqueIDResult(appID string, options *UniqueIDOptions) (*BindingResult, err
 	opts := normalizeUniqueIDOptions(options)
 
 	if opts.ForceMACBinding {
-		return ProtectedIDWithMACResult(appID)
+		return protectedIDWithPriority(appID, true, opts.Hardware)
 	}
 
 	id, err := idProvider()
@@ -264,7 +285,7 @@ func UniqueIDResult(appID string, options *UniqueIDOptions) (*BindingResult, err
 	}
 
 	// 尝试硬件指纹
-	if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil {
+	if fpStatus, fpErr := getFingerprintStatusForBinding(opts.Hardware); fpErr == nil && fpStatus != nil {
 		if fpStatus.Stable && fpStatus.Value != "" {
 			combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
 			result.Hash = protect(combined, id)
@@ -310,7 +331,7 @@ func UniqueIDResult(appID string, options *UniqueIDOptions) (*BindingResult, err
 // ProtectedIDWithMAC returns a hashed version of the machine ID bound to MAC address.
 // Deprecated: Use ProtectedID instead, which intelligently handles hardware binding.
 func ProtectedIDWithMAC(appID string) (string, error) {
-	result, err := protectedIDWithPriority(appID, true)
+	result, err := protectedIDWithPriority(appID, true, nil)
 	if err != nil {
 		return "", err
 	}
@@ -319,11 +340,11 @@ func ProtectedIDWithMAC(appID string) (string, error) {
 
 // ProtectedIDWithMACResult 返回强制 MAC 绑定模式下的详细结果
 func ProtectedIDWithMACResult(appID string) (*BindingResult, error) {
-	return protectedIDWithPriority(appID, true)
+	return protectedIDWithPriority(appID, true, nil)
 }
 
 // protectedIDWithPriority 智能优先级处理的保护ID生成
-func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult, error) {
+func protectedIDWithPriority(appID string, forceMACBinding bool, hardwareOptions *HardwareOptions) (*BindingResult, error) {
 	id, err := idProvider()
 	if err != nil {
 		return nil, fmt.Errorf("machineid: %v", err)
@@ -333,7 +354,7 @@ func protectedIDWithPriority(appID string, forceMACBinding bool) (*BindingResult
 
 	// 尝试硬件指纹
 	if !forceMACBinding {
-		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil {
+		if fpStatus, fpErr := getFingerprintStatusForBinding(hardwareOptions); fpErr == nil && fpStatus != nil {
 			if fpStatus.Stable && fpStatus.Value != "" {
 				combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
 				result.Hash = protect(combined, id)
@@ -633,6 +654,15 @@ func GetInfo(appID string) (*Info, error) {
 //   - container_scoped：仅使用容器命名空间/挂载等稳定特征派生；再不行使用容器 ID；最后落回标准 machine-id。
 //   - hybrid：尽量组合宿主机硬件指纹与容器稳定特征，兼顾稳定性与隔离性。
 func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig) (*BindingResult, error) {
+	return ProtectedIDWithContainerAwareWithOptions(appID, config, nil)
+}
+
+// ProtectedIDWithContainerAwareWithOptions 在容器感知绑定路径中额外支持按调用注入硬件信号 provider。
+func ProtectedIDWithContainerAwareWithOptions(
+	appID string,
+	config *ContainerBindingConfig,
+	options *BindingOptions,
+) (*BindingResult, error) {
 	if config != nil {
 		if err := config.Validate(); err != nil {
 			return nil, fmt.Errorf("invalid container binding config: %w", err)
@@ -654,7 +684,7 @@ func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig)
 	// 非容器环境，使用标准优先级绑定
 	if !isContainer {
 		result.ContainerMode = "none"
-		base, err := protectedIDWithPriority(appID, false)
+		base, err := protectedIDWithPriority(appID, false, extractHardwareOptions(options))
 		if err != nil {
 			return nil, err
 		}
@@ -668,7 +698,7 @@ func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig)
 	// 传入 nil 表示保持历史行为（避免在容器里意外从 MAC/machine-id 变成 custom）。
 	if config == nil {
 		result.ContainerMode = "none"
-		base, err := protectedIDWithPriority(appID, false)
+		base, err := protectedIDWithPriority(appID, false, extractHardwareOptions(options))
 		if err != nil {
 			return nil, err
 		}
@@ -684,7 +714,7 @@ func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig)
 	switch strategy {
 	case "host_hardware":
 		// 使用宿主机硬件指纹
-		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+		if fpStatus, fpErr := getFingerprintStatusForBinding(extractHardwareOptions(options)); fpErr == nil && fpStatus != nil && fpStatus.Stable {
 			combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
 			result.Hash = protect(combined, id)
 			result.Mode = BindingModeFingerprint
@@ -718,7 +748,7 @@ func ProtectedIDWithContainerAware(appID string, config *ContainerBindingConfig)
 	case "hybrid":
 		// 混合模式：硬件指纹 + 容器特征
 		var components []string
-		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+		if fpStatus, fpErr := getFingerprintStatusForBinding(extractHardwareOptions(options)); fpErr == nil && fpStatus != nil && fpStatus.Stable {
 			components = append(components, fpStatus.Value)
 		}
 		features := getContainerPersistentFeaturesWithConfig(config)
@@ -747,7 +777,7 @@ func uniqueIDFromContainer(appID, id, strategy string, config *ContainerBindingC
 
 	switch strategy {
 	case "host_hardware":
-		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+		if fpStatus, fpErr := getFingerprintStatusForBinding(nil); fpErr == nil && fpStatus != nil && fpStatus.Stable {
 			combined := fmt.Sprintf("%s/%s/%s", appID, id, fpStatus.Value)
 			result.Hash = protect(combined, id)
 			result.Mode = BindingModeFingerprint
@@ -780,7 +810,7 @@ func uniqueIDFromContainer(appID, id, strategy string, config *ContainerBindingC
 
 	case "hybrid":
 		var components []string
-		if fpStatus, fpErr := fingerprintStatusProvider(); fpErr == nil && fpStatus != nil && fpStatus.Stable {
+		if fpStatus, fpErr := getFingerprintStatusForBinding(nil); fpErr == nil && fpStatus != nil && fpStatus.Stable {
 			components = append(components, fpStatus.Value)
 		}
 		features := getContainerPersistentFeaturesWithConfig(config)
@@ -815,4 +845,18 @@ func uniqueIDFromBindingProviders(appID, id string) (*BindingResult, bool) {
 		return result, true
 	}
 	return nil, false
+}
+
+func extractHardwareOptions(options *BindingOptions) *HardwareOptions {
+	if options == nil {
+		return nil
+	}
+	return options.Hardware
+}
+
+func getFingerprintStatusForBinding(options *HardwareOptions) (*FingerprintStatus, error) {
+	if options == nil {
+		return fingerprintStatusProvider()
+	}
+	return GetHardwareFingerprintStatusWithOptions(options)
 }

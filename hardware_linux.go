@@ -1,9 +1,9 @@
 //go:build linux
-// +build linux
 
 package machineid
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -264,8 +264,8 @@ func getDMIInfo(info *linuxHardwareInfo) {
 func getStorageInfo(info *linuxHardwareInfo) {
 	// 获取根分区UUID
 	if mounts, err := readFileString("/proc/mounts"); err == nil {
-		lines := strings.Split(mounts, "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(mounts, "\n")
+		for line := range lines {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 && fields[1] == "/" {
 				// 尝试从设备名获取UUID
@@ -355,8 +355,8 @@ func getNetworkInfo(info *linuxHardwareInfo) {
 // getMemoryInfo 获取内存信息
 func getMemoryInfo(info *linuxHardwareInfo) {
 	if meminfo, err := readFileString("/proc/meminfo"); err == nil {
-		lines := strings.Split(meminfo, "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(meminfo, "\n")
+		for line := range lines {
 			if strings.HasPrefix(line, "MemTotal:") {
 				fields := strings.Fields(line)
 				if len(fields) >= 2 {
@@ -423,42 +423,15 @@ func GetHardwareFingerprint() (string, error) {
 
 // GetHardwareFingerprintStatus 返回指纹值及稳定性
 func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	return defaultFingerprintStatusProvider()
+}
+
+func builtinHardwareSignals(_ context.Context) ([]HardwareSignal, error) {
 	info, err := GetHardwareInfo()
 	if err != nil {
 		return nil, err
 	}
-
-	weights := collectHardwareWeights(info)
-	if len(weights) == 0 {
-		return nil, fmt.Errorf("no hardware identifiers available")
-	}
-
-	sort.Slice(weights, func(i, j int) bool {
-		return weights[i].Weight > weights[j].Weight
-	})
-
-	var components []string
-	totalWeight := 0
-
-	for _, w := range weights {
-		if w.Value == "" {
-			continue
-		}
-		components = append(components, fmt.Sprintf("%s:%s", w.Name, w.Value))
-		totalWeight += w.Weight
-		if totalWeight >= 200 {
-			break
-		}
-	}
-
-	if len(components) == 0 {
-		return nil, fmt.Errorf("no valid hardware identifiers found")
-	}
-
-	combined := strings.Join(components, "|")
-	hash := sha256.Sum256([]byte(combined))
-	stable := totalWeight >= 150
-	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: stable}, nil
+	return hardwareSignalsFromWeights(collectHardwareWeights(info), "builtin/linux"), nil
 }
 
 // collectHardwareWeights 收集硬件权重信息

@@ -9,4 +9,3 @@ type HardwareWeight struct {
 	Value  string
 	Weight int
 }
-

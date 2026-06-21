@@ -1,7 +1,9 @@
 package machineid
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -138,6 +140,57 @@ func TestProtectedIDResultUsesCustomProviderWhenBuiltinsUnavailable(t *testing.T
 	}
 }
 
+func TestProtectedIDResultWithOptionsUsesCustomHardwareProvider(t *testing.T) {
+	stubIDProvider(t, func() (string, error) { return "machine-123", nil })
+	stubMACResolver(t, func() (*MACInfo, error) { return nil, nil })
+
+	result, err := ProtectedIDResultWithOptions("app", &BindingOptions{
+		Hardware: &HardwareOptions{
+			Provider: HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+				return []HardwareSignal{
+					{Name: "fixture_uuid", Value: "fixture-001", Weight: 220, Strong: true, Source: "fixture"},
+				}, nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Mode != BindingModeFingerprint {
+		t.Fatalf("expected fingerprint mode, got %s", result.Mode)
+	}
+	expected := protect("app/machine-123/"+sha256Sum("fixture_uuid:fixture-001"), "machine-123")
+	if result.Hash != expected {
+		t.Fatalf("unexpected hash: got %s want %s", result.Hash, expected)
+	}
+}
+
+func TestProtectedIDResultWithReplaceHardwareProviderBypassesBuiltinFingerprint(t *testing.T) {
+	stubIDProvider(t, func() (string, error) { return "machine-123", nil })
+	stubFingerprint(t, func() (*FingerprintStatus, error) {
+		return &FingerprintStatus{Value: "builtin-fp", Stable: true}, nil
+	})
+	stubMACResolver(t, func() (*MACInfo, error) { return nil, nil })
+
+	result, err := ProtectedIDResultWithOptions("app", &BindingOptions{
+		Hardware: &HardwareOptions{
+			Mode: HardwareProviderReplace,
+			Provider: HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+				return []HardwareSignal{
+					{Name: "replace_fp", Value: "replace-001", Weight: 220, Strong: true, Source: "replace"},
+				}, nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := protect("app/machine-123/"+sha256Sum("replace_fp:replace-001"), "machine-123")
+	if result.Hash != expected {
+		t.Fatalf("unexpected hash: got %s want %s", result.Hash, expected)
+	}
+}
+
 func TestUniqueIDResultUsesCustomProvider(t *testing.T) {
 	stubIDProvider(t, func() (string, error) { return "machine-123", nil })
 	stubFingerprint(t, func() (*FingerprintStatus, error) {
@@ -165,6 +218,30 @@ func TestUniqueIDResultUsesCustomProvider(t *testing.T) {
 		t.Fatalf("expected custom provider, got %s", result.Provider)
 	}
 	expected := protect("app/machine-123/custom-value", "machine-123")
+	if result.Hash != expected {
+		t.Fatalf("unexpected hash: got %s want %s", result.Hash, expected)
+	}
+}
+
+func TestUniqueIDResultUsesInjectedHardwareProvider(t *testing.T) {
+	stubIDProvider(t, func() (string, error) { return "machine-123", nil })
+	stubMACResolver(t, func() (*MACInfo, error) { return nil, nil })
+
+	result, err := UniqueIDResult("app", &UniqueIDOptions{
+		EnableContainer:       false,
+		EnableCustomProviders: false,
+		Hardware: &HardwareOptions{
+			Provider: HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+				return []HardwareSignal{
+					{Name: "fixture_uuid", Value: "fixture-unique", Weight: 220, Strong: true, Source: "fixture"},
+				}, nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := protect("app/machine-123/"+sha256Sum("fixture_uuid:fixture-unique"), "machine-123")
 	if result.Hash != expected {
 		t.Fatalf("unexpected hash: got %s want %s", result.Hash, expected)
 	}
@@ -407,6 +484,55 @@ func TestResetBindingProvidersClearsRegistry(t *testing.T) {
 	}
 }
 
+func TestNamedHardwareSignalProviderLifecycle(t *testing.T) {
+	resetHardwareSignalProviders(t)
+	RegisterNamedHardwareSignalProvider("fixture", HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+		return []HardwareSignal{{Name: "fixture_uuid", Value: "fixture-001", Weight: 220, Strong: true}}, nil
+	}))
+	RegisterNamedHardwareSignalProvider("fixture", HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+		return []HardwareSignal{{Name: "fixture_uuid", Value: "fixture-002", Weight: 220, Strong: true}}, nil
+	}))
+
+	providers := listHardwareSignalProviders()
+	if len(providers) != 1 {
+		t.Fatalf("expected 1 hardware signal provider, got %d", len(providers))
+	}
+
+	signals, err := collectHardwareSignals(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("collectHardwareSignals failed: %v", err)
+	}
+	found := false
+	for _, signal := range signals {
+		if signal.Name == "fixture_uuid" && signal.Value == "fixture-002" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected updated hardware provider output, got %+v", signals)
+	}
+
+	if !UnregisterHardwareSignalProvider("fixture") {
+		t.Fatalf("expected hardware signal provider removal")
+	}
+	if UnregisterHardwareSignalProvider("fixture") {
+		t.Fatalf("expected duplicate hardware signal provider removal to report false")
+	}
+}
+
+func TestResetHardwareSignalProvidersClearsRegistry(t *testing.T) {
+	resetHardwareSignalProviders(t)
+	RegisterNamedHardwareSignalProvider("fixture", HardwareSignalProviderFunc(func(_ context.Context) ([]HardwareSignal, error) {
+		return []HardwareSignal{{Name: "fixture_uuid", Value: "fixture-001", Weight: 220, Strong: true}}, nil
+	}))
+
+	ResetHardwareSignalProviders()
+	if providers := listHardwareSignalProviders(); len(providers) != 0 {
+		t.Fatalf("expected hardware signal registry empty, got %d", len(providers))
+	}
+}
+
 func TestNamedContainerHintProviderLifecycle(t *testing.T) {
 	resetContainerHintProviders(t)
 	RegisterContainerHintProvider(func() []string { return []string{"anon-a"} })
@@ -458,12 +584,7 @@ func TestResetContainerHintProvidersClearsAllRegistries(t *testing.T) {
 }
 
 func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func TestContainerHintCombineModeLifecycle(t *testing.T) {

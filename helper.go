@@ -33,6 +33,14 @@ func run(stdout, stderr io.Writer, cmd string, args ...string) error {
 	return nil
 }
 
+// commandOutput 执行命令并返回 stdout。
+//
+// 该函数在 Linux 平台下看似未被引用，但在 darwin / aix / freebsd 等平台被广泛使用
+// （system_profiler、ioreg、uname、sysctl、kenv 等命令调用），是跨平台硬件/网卡信息采集的命脉，
+// 删除将直接导致这些平台编译失败。golangci-lint 的 unused 检查只分析当前编译平台的 build tags，
+// 无法看到其它平台的调用点，故在此显式标注。
+//
+//nolint:unused
 func commandOutput(cmd string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), externalCommandTimeout)
 	defer cancel()

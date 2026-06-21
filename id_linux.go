@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package machineid
 
@@ -136,8 +135,8 @@ func getContainerIDFromCgroup() string {
 		return ""
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
 		if strings.Contains(line, "docker") || strings.Contains(line, "containerd") ||
 			strings.Contains(line, "containers") || strings.Contains(line, "sandbox") {
 			if candidate := extractContainerIDFromPath(line); candidate != "" {
@@ -154,8 +153,8 @@ func getContainerIDFromMountinfo() string {
 		return ""
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
 		field := strings.Split(line, " ")
 		if len(field) < 10 {
 			continue
@@ -215,8 +214,8 @@ func dockerEnvExist(_path string) bool {
 }
 
 func extractContainerIDFromPath(path string) string {
-	segments := strings.Split(path, "/")
-	for _, seg := range segments {
+	segments := strings.SplitSeq(path, "/")
+	for seg := range segments {
 		if candidate := normalizeContainerIDCandidate(seg); candidate != "" {
 			return candidate
 		}

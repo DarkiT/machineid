@@ -1,10 +1,9 @@
 //go:build !linux && !windows && !darwin
-// +build !linux,!windows,!darwin
 
 package machineid
 
 import (
-	"crypto/sha256"
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -74,24 +73,45 @@ func GetHardwareFingerprint() (string, error) {
 
 // GetHardwareFingerprintStatus 返回简单指纹信息
 func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	return defaultFingerprintStatusProvider()
+}
+
+func builtinHardwareSignals(_ context.Context) ([]HardwareSignal, error) {
 	info, err := GetHardwareInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	if len(info.MACAddresses) == 0 {
-		return nil, fmt.Errorf("no hardware identifiers available")
+	var signals []HardwareSignal
+	if len(info.MACAddresses) > 0 {
+		signals = append(signals, HardwareSignal{
+			Name:   "mac",
+			Value:  info.MACAddresses[0],
+			Weight: 100,
+			Strong: true,
+			Scope:  HardwareScopeNetwork,
+			Source: "builtin/other",
+		})
 	}
-
-	combined := fmt.Sprintf("other_platform|mac:%s", info.MACAddresses[0])
 	if info.MachineID != "" {
-		combined = combined + "|machine_id:" + info.MachineID
+		signals = append(signals, HardwareSignal{
+			Name:   "machine_id",
+			Value:  info.MachineID,
+			Weight: 40,
+			Scope:  HardwareScopeRuntime,
+			Source: "builtin/other",
+		})
 	}
 	if info.Hostname != "" {
-		combined = combined + "|hostname:" + info.Hostname
+		signals = append(signals, HardwareSignal{
+			Name:   "hostname",
+			Value:  info.Hostname,
+			Weight: 20,
+			Scope:  HardwareScopeRuntime,
+			Source: "builtin/other",
+		})
 	}
-	hash := sha256.Sum256([]byte(combined))
-	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: true}, nil
+	return signals, nil
 }
 
 // ProtectedIDWithHardware 其他平台版本

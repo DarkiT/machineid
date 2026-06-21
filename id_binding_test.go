@@ -51,3 +51,16 @@ func resetContainerHintProviders(t *testing.T) {
 		containerHintProvidersMu.Unlock()
 	})
 }
+
+func resetHardwareSignalProviders(t *testing.T) {
+	t.Helper()
+	hardwareSignalProvidersMu.Lock()
+	orig := append([]namedHardwareSignalProvider(nil), hardwareSignalProviders...)
+	hardwareSignalProviders = nil
+	hardwareSignalProvidersMu.Unlock()
+	t.Cleanup(func() {
+		hardwareSignalProvidersMu.Lock()
+		hardwareSignalProviders = orig
+		hardwareSignalProvidersMu.Unlock()
+	})
+}

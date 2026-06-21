@@ -1,11 +1,10 @@
 //go:build windows
-// +build windows
 
 package machineid
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -549,41 +548,15 @@ func GetHardwareFingerprint() (string, error) {
 
 // GetHardwareFingerprintStatus 返回指纹与稳定性（权重累计达到阈值认为稳定）。
 func GetHardwareFingerprintStatus() (*FingerprintStatus, error) {
+	return defaultFingerprintStatusProvider()
+}
+
+func builtinHardwareSignals(_ context.Context) ([]HardwareSignal, error) {
 	info, err := GetHardwareInfo()
 	if err != nil {
 		return nil, err
 	}
-
-	weights := collectHardwareWeights(info)
-	if len(weights) == 0 {
-		return nil, fmt.Errorf("no hardware identifiers available")
-	}
-
-	sort.Slice(weights, func(i, j int) bool {
-		return weights[i].Weight > weights[j].Weight
-	})
-
-	var components []string
-	totalWeight := 0
-	for _, w := range weights {
-		if w.Value == "" {
-			continue
-		}
-		components = append(components, fmt.Sprintf("%s:%s", w.Name, w.Value))
-		totalWeight += w.Weight
-		if totalWeight >= 200 {
-			break
-		}
-	}
-
-	if len(components) == 0 {
-		return nil, fmt.Errorf("no valid hardware identifiers found")
-	}
-
-	combined := strings.Join(components, "|")
-	hash := sha256.Sum256([]byte(combined))
-	stable := totalWeight >= 150
-	return &FingerprintStatus{Value: fmt.Sprintf("%x", hash), Stable: stable}, nil
+	return hardwareSignalsFromWeights(collectHardwareWeights(info), "builtin/windows"), nil
 }
 
 // collectHardwareWeights 收集硬件权重信息（Windows 版）。

@@ -9,6 +9,33 @@ import (
 	"github.com/darkit/machineid"
 )
 
+func shortenHardwareValue(value string) string {
+	const maxLen = 24
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen] + "..."
+}
+
+func formatHardwareSignal(signal machineid.HardwareSignal) string {
+	parts := []string{
+		fmt.Sprintf("%s=%s", signal.Name, shortenHardwareValue(signal.Value)),
+		fmt.Sprintf("weight=%d", signal.Weight),
+	}
+
+	if signal.Scope != "" {
+		parts = append(parts, fmt.Sprintf("scope=%s", signal.Scope))
+	}
+	if signal.Source != "" {
+		parts = append(parts, fmt.Sprintf("source=%s", signal.Source))
+	}
+	if signal.Strong {
+		parts = append(parts, "strong=true")
+	}
+
+	return strings.Join(parts, " | ")
+}
+
 func main() {
 	fmt.Println("=== machineid 包功能测试 ===")
 
@@ -34,6 +61,25 @@ func main() {
 				chain = append(chain, string(stage))
 			}
 			fmt.Printf("回退链路: %s\n", strings.Join(chain, " -> "))
+		}
+	}
+
+	fmt.Println("\n1.2 硬件指纹诊断:")
+	fingerprintStatus, err := machineid.GetHardwareFingerprintStatus()
+	if err != nil {
+		log.Printf("获取硬件指纹失败: %v", err)
+	} else {
+		fmt.Printf("硬件指纹: %s\n", fingerprintStatus.Value)
+		fmt.Printf("是否稳定: %t\n", fingerprintStatus.Stable)
+		fmt.Printf("总权重: %d\n", fingerprintStatus.TotalWeight)
+		if len(fingerprintStatus.Sources) > 0 {
+			fmt.Printf("信号来源: %s\n", strings.Join(fingerprintStatus.Sources, ", "))
+		}
+		if len(fingerprintStatus.Signals) > 0 {
+			fmt.Println("参与信号:")
+			for _, signal := range fingerprintStatus.Signals {
+				fmt.Printf("  - %s\n", formatHardwareSignal(signal))
+			}
 		}
 	}
 
