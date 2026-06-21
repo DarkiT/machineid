@@ -88,7 +88,7 @@ linters-settings:
   # goimports 配置
   goimports:
     # 本地包前缀
-    local-prefixes: github.com/vibedev/vibedevtools
+    local-prefixes: github.com/darkit/machineid
     
   # govet 配置
   govet:
